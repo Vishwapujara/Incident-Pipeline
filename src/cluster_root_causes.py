@@ -51,6 +51,14 @@ BOILERPLATE_MARKERS = [
     "no incident",
     "planned change",
     "no failure",
+    # Added after Phase 6 re-run: non-answers phrased differently that
+    # slipped through and formed a false "blackbox probe" cluster.
+    # Deliberately NOT "unclear"/bare "unknown" - those match real causes
+    # (e.g. "left the database in an unclear state").
+    "not yet determined",
+    "not been identified",
+    "root cause not",
+    "is unknown",
 ]
 
 

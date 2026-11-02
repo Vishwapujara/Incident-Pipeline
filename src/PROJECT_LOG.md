@@ -684,3 +684,53 @@ phase structure - this is the THIRD distinct confound caught
 across Phases 3, 5, and 6 by reading actual output rather than
 trusting a summary number/count, reinforcing this as a load-bearing
 practice for this project, not a one-off habit.
+--- Entry: Phase 6 chaining fix confirmed; boilerplate filter gap found and closed ---
+Re-ran cluster_root_causes.py with the L2-normalization +
+cluster_selection_method="leaf" fix from the previous entry (same
+250-record batch, 159 substantive summaries after the boilerplate
+filter). The chaining failure is resolved: 7 clusters of 3-10
+incidents each instead of one 119-incident blob, with 123 summaries
+left unclustered as unique. No min_samples tuning was needed.
+
+Genuine findings in that run: the post-deploy DB migration lock
+cluster (10 incidents) reappeared even more clearly and now spans
+FOUR failure_category values (DB-Migration, Saturation,
+Software-Change, Release-Compatibility) - the strongest
+"same root cause, inconsistent categorization" result so far. The
+SSD-quota (4) and Sidekiq/PgBouncer saturation (4) clusters also
+held up as tight single-category groups.
+
+Problem found by reading cluster contents again: one 3-incident
+cluster (blackbox probe failures) was not a real root-cause group.
+Two of its three summaries were LLM non-answers ("Root cause not
+yet determined...", "The root cause has not been identified...")
+worded differently enough to slip past BOILERPLATE_MARKERS. They
+grouped on the shared alert type (blackbox probes), not a shared
+cause - a narrower repeat of the first Phase 6 confound.
+
+Fix: before changing the filter, tested each candidate marker
+against the 159 surviving summaries to see exactly what it would
+remove. Added "not yet determined", "not been identified",
+"root cause not", and "is unknown" (5 genuine non-answers caught).
+Deliberately rejected "unclear" and bare "unknown": "unclear"
+matched a real root cause ("a tool... wrote to the ops production
+database, leaving it in an unclear state"), so a broad marker
+would have silently discarded real data.
+
+Result after the fix: 96 summaries filtered (was 91), 154
+substantive remain, 7 clusters, 115 unclustered. The false
+blackbox-probe cluster is gone. One remaining probe-failure
+summary with a real cause (bot/spam traffic) moved into the
+traffic cluster, which is now 11 incidents and surfaces a second
+cross-category finding: surges of .diff/.patch requests
+overloading Gitaly are labeled Malicious-Traffic, Naive-Traffic,
+AND Saturation depending on the incident. That cluster still
+contains 3 loosely related members (TCP port-22 blackholing to
+runners, runner capacity stockouts, orphaned runner VMs), and a
+new 3-incident "deployment pipeline breakage" cluster is weak
+(shared vocabulary, different causes). Both are expected to
+sharpen or dissolve as more extraction batches grow the dataset,
+so no further tuning was done on 250 records. Plan change: none
+to phase structure. Boilerplate markers should be re-checked
+against the summaries whenever the extraction model chain
+changes, since each model phrases non-answers differently.
