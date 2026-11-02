@@ -1,0 +1,9 @@
+requests
+python-dotenv
+pandas
+pydantic
+groq
+spacy
+ruptures
+sentence-transformers
+scikit-learn

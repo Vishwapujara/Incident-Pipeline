@@ -1,0 +1,95 @@
+Found 12735 incidents needing extraction.
+
+Rate limit hit at record 3/12735 (id=238). Stopping run - progress is saved.
+Provider message: Error code: 429 - {'error': {'message': 'Rate limit reached for model `openai/gpt-oss-120b` in organization `org_01kg7svmgaesnsxjxabe18xznx` service tier `on_demand` on tokens per day (TPD): Limit 200000, Used 199534, Requested 791. Please try again in 2m20.4s. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing', 'type': 'tokens', 'code': 'rate_limit_exceeded'}}
+Re-run 'python -m src.extract' later to continue from where this left off (already-processed records are skipped automatically).
+
+Stopped early. Succeeded: 2, Failed: 0, Attempted before stopping: 2
+Found 12733 incidents needing extraction.
+
+Rate limit hit at record 3/12733 (id=240). Stopping run - progress is saved.
+Provider message: Error code: 429 - {'error': {'message': 'Rate limit reached for model `openai/gpt-oss-120b` in organization `org_01kg7svmgaesnsxjxabe18xznx` service tier `on_demand` on tokens per day (TPD): Limit 200000, Used 199224, Requested 1050. Please try again in 1m58.368s. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing', 'type': 'tokens', 'code': 'rate_limit_exceeded'}}
+Re-run 'python -m src.extract' later to continue from where this left off (already-processed records are skipped automatically).
+
+Stopped early. Succeeded: 2, Failed: 0, Attempted before stopping: 2
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/Users/khushpatel/Desktop/ML Projects/Incident Pipeline/src/extract.py", line 131, in <module>
+    run(limit=limit_arg)
+  File "/Users/khushpatel/Desktop/ML Projects/Incident Pipeline/src/extract.py", line 109, in run
+    save_result(conn, incident_id, result, current_model)
+  File "/Users/khushpatel/Desktop/ML Projects/Incident Pipeline/src/extract.py", line 39, in save_result
+    conn.execute("""
+sqlite3.OperationalError: table structured_incidents has no column named llm_model
+Found 12731 incidents needing extraction.
+Using model: openai/gpt-oss-120b
+Found 12656 incidents needing extraction.
+Using model: openai/gpt-oss-120b
+[25/12656] processed so far (25 ok, 0 failed, current model: openai/gpt-oss-120b)
+  Extraction failed after 3 attempts: Error code: 400 - {'error': {'message': "Failed to generate JSON. Please adjust your prompt. See 'failed_generation' for more details.", 'type': 'invalid_request_error', 'code': 'json_validate_failed', 'failed_generation': 'I’m sorry, but I can’t help with that.'}}
+[29/12656] id=367 SKIPPED (extraction failed)
+[50/12656] processed so far (49 ok, 1 failed, current model: openai/gpt-oss-120b)
+[75/12656] processed so far (74 ok, 1 failed, current model: openai/gpt-oss-120b)
+[100/12656] processed so far (99 ok, 1 failed, current model: openai/gpt-oss-120b)
+
+Rate limit hit on 'openai/gpt-oss-120b' at record 108/12656 (id=464).
+Switching to backup model: openai/gpt-oss-20b
+
+Rate limit hit on 'openai/gpt-oss-20b' at record 123/12656 (id=482).
+Switching to backup model: qwen/qwen3.6-27b
+Found 300 incidents needing extraction.
+Using model: openai/gpt-oss-120b
+  Extraction failed after 3 attempts: Error code: 400 - {'error': {'message': "Failed to generate JSON. Please adjust your prompt. See 'failed_generation' for more details.", 'type': 'invalid_request_error', 'code': 'json_validate_failed', 'failed_generation': 'I’m sorry, but I can’t help with that.'}}
+[1/300] id=367 SKIPPED (extraction failed)
+
+Rate limit hit on 'openai/gpt-oss-120b' at record 3/300 (id=484).
+Switching to backup model: openai/gpt-oss-20b
+
+Rate limit hit on 'openai/gpt-oss-20b' at record 14/300 (id=497).
+Switching to backup model: qwen/qwen3.6-27b
+
+Rate limit hit on 'qwen/qwen3.6-27b' at record 18/300 (id=503).
+Switching to backup model: qwen/qwen3.8-27b
+[25/300] processed so far (24 ok, 1 failed, current model: qwen/qwen3.8-27b)
+[50/300] processed so far (49 ok, 1 failed, current model: qwen/qwen3.8-27b)
+[75/300] processed so far (74 ok, 1 failed, current model: qwen/qwen3.8-27b)
+[100/300] processed so far (99 ok, 1 failed, current model: qwen/qwen3.8-27b)
+[125/300] processed so far (124 ok, 1 failed, current model: qwen/qwen3.8-27b)
+[150/300] processed so far (149 ok, 1 failed, current model: qwen/qwen3.8-27b)
+
+Rate limit hit on 'qwen/qwen3.8-27b' at record 175/300 (id=694).
+All models in the fallback chain are rate-limited. Stopping run - progress is saved.
+Provider message: Error code: 429 - {'error': {'message': "Request too large for model `qwen/qwen3.8-27b` in organization `org_01kg7svmgaesnsxjxabe18xznx` service tier `on_demand` on output tokens per minute (OTPM): Limit 1000, Requested 1015. The request's expected output tokens exceed the enforced limit; reduce max_tokens (or the request's expected output) and try again. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing", 'type': 'tokens', 'code': 'rate_limit_exceeded'}}
+Re-run 'python -m src.extract' later to continue (already-processed records are skipped automatically).
+
+Stopped early. Succeeded: 173, Failed: 1, Attempted before stopping: 174
+Scoped to incidents from 2023-09-15 onward (most recent first).
+Found 300 incidents needing extraction.
+Using model: openai/gpt-oss-120b
+[25/300] processed so far (25 ok, 0 failed, current model: openai/gpt-oss-120b)
+[50/300] processed so far (50 ok, 0 failed, current model: openai/gpt-oss-120b)
+[75/300] processed so far (75 ok, 0 failed, current model: openai/gpt-oss-120b)
+[100/300] processed so far (100 ok, 0 failed, current model: openai/gpt-oss-120b)
+[125/300] processed so far (125 ok, 0 failed, current model: openai/gpt-oss-120b)
+[150/300] processed so far (150 ok, 0 failed, current model: openai/gpt-oss-120b)
+[175/300] processed so far (175 ok, 0 failed, current model: openai/gpt-oss-120b)
+
+Rate limit hit on 'openai/gpt-oss-120b' at record 198/300 (id=22546).
+Switching to backup model: openai/gpt-oss-20b
+[200/300] processed so far (200 ok, 0 failed, current model: openai/gpt-oss-20b)
+[225/300] processed so far (225 ok, 0 failed, current model: openai/gpt-oss-20b)
+
+Rate limit hit on 'openai/gpt-oss-20b' at record 248/300 (id=22475).
+Switching to backup model: qwen/qwen3.6-27b
+[250/300] processed so far (250 ok, 0 failed, current model: qwen/qwen3.6-27b)
+
+Rate limit hit on 'qwen/qwen3.6-27b' at record 251/300 (id=22471).
+Switching to backup model: qwen/qwen3.8-27b
+
+Rate limit hit on 'qwen/qwen3.8-27b' at record 251/300 (id=22471).
+All models in the fallback chain are rate-limited. Stopping run - progress is saved.
+Provider message: Error code: 429 - {'error': {'message': "Request too large for model `qwen/qwen3.8-27b` in organization `org_01kg7svmgaesnsxjxabe18xznx` service tier `on_demand` on output tokens per minute (OTPM): Limit 1000, Requested 1610. The request's expected output tokens exceed the enforced limit; reduce max_tokens (or the request's expected output) and try again. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing", 'type': 'tokens', 'code': 'rate_limit_exceeded'}}
+Re-run 'python -m src.extract' later to continue (already-processed records are skipped automatically).
+
+Stopped early. Succeeded: 250, Failed: 0, Attempted before stopping: 250
