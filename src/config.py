@@ -63,6 +63,14 @@ MIN_WEEKS_FOR_DETECTION = 6
 # this bar are reported as "too sparse to evaluate," not flagged.
 MIN_TOTAL_FOR_ZSCORE = 10
 
+# Phase 5: minimum fraction of a week's raw incidents that must have
+# been extracted for that week to be used in pattern detection.
+# Extraction runs newest-first in daily batches (and can leave holes
+# when calls fail), so older weeks are often only partly extracted.
+# Without this, the boundary between "partly extracted" and "fully
+# extracted" weeks shows up as a false rise in every category at once.
+MIN_WEEK_EXTRACTION_COVERAGE = 0.9
+
 # Phase 7: summarization uses a single fixed model, no fallback chain -
 # this phase only makes a handful of calls (one per flagged finding,
 # not one per incident), so daily rate limits aren't a real concern

@@ -13,7 +13,9 @@ from src.config import DB_PATH
 
 def get_connection():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    # timeout: wait for another process's write (e.g. a running extraction
+    # batch) to finish instead of failing immediately with "database is locked".
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
@@ -75,6 +77,32 @@ def init_schema():
             failure_category TEXT NOT NULL,
             count INTEGER NOT NULL,
             PRIMARY KEY (week_start, failure_category)
+        )
+    """)
+
+    # Phase 7: one LLM explanation per flagged finding. finding_key is
+    # stable across runs (e.g. "changepoint:Saturation:2026-08-10");
+    # evidence_hash changes when the supporting incident set changes,
+    # which is what triggers regeneration. active=0 marks findings that
+    # no longer appear in the latest run (kept, not deleted, so the
+    # history of what was flagged is preserved).
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS pattern_summaries (
+            finding_key TEXT PRIMARY KEY,
+            finding_type TEXT NOT NULL,          -- changepoint | anomaly | cluster
+            category TEXT,                       -- NULL for clusters
+            stats_json TEXT NOT NULL,            -- numbers the finding is based on
+            evidence_ids_json TEXT NOT NULL,     -- incident ids shown to the LLM
+            evidence_hash TEXT NOT NULL,
+            headline TEXT NOT NULL,
+            explanation TEXT NOT NULL,
+            cited_ids_json TEXT NOT NULL,        -- subset of evidence ids the LLM cited
+            coherent INTEGER NOT NULL,           -- LLM's verdict: is this a real pattern?
+            confidence TEXT NOT NULL,            -- high | medium | low
+            caveats TEXT,
+            llm_model TEXT NOT NULL,
+            generated_at TEXT NOT NULL,
+            active INTEGER NOT NULL DEFAULT 1
         )
     """)
 

@@ -734,3 +734,95 @@ so no further tuning was done on 250 records. Plan change: none
 to phase structure. Boilerplate markers should be re-checked
 against the summaries whenever the extraction model chain
 changes, since each model phrases non-answers differently.
+
+--- Entry: extraction batch hit a network outage; SQLite lock fix ---
+Ran `python -m src.extract --limit 300`: 200 succeeded, 100 failed.
+The failures were "Connection error" (a temporary network drop, not
+rate limits or bad output) - records ~157-258 failed in one
+contiguous stretch. Failed records aren't saved, so the next run
+retries them automatically. structured_incidents: 250 -> 450.
+Known weakness, not fixed yet: extract.py treats a connection error
+as a per-record failure, so an outage silently burns through
+records instead of pausing/stopping the run.
+
+Separate bug found while trying to run Phase 7 alongside the batch:
+"database is locked". extract.py committed only every 25 records,
+and an open SQLite write transaction locks the whole file - so
+nothing else could write (aggregate, summarize) for minutes at a
+time, defeating the "run batches while building later phases"
+workflow. Fix: commit after every record (also limits loss on a
+crash to one record), and get_connection() now waits up to 30s for
+a lock (sqlite3 timeout) instead of failing immediately.
+
+--- Entry: Phase 7 built; caught left-censoring from partial extraction ---
+Built summarize.py. It collects every finding from Phase 5
+(change-points, z-score anomalies with count > 0) and Phase 6
+(clusters), loads the incidents behind each one (max 8, title +
+extracted root cause + 700-char report excerpt), and asks the LLM
+for a headline, 3-5 sentence explanation, cited incident ids,
+a coherent yes/no verdict, confidence, and caveats.
+Design decisions:
+  - Grounding check: cited ids not in the evidence set are dropped;
+    a response citing nothing valid is retried, then skipped.
+  - Skeptical prompt: the model is told automated detection often
+    flags artifacts and asked whether the incidents GENUINELY share
+    a cause - after three confounds in Phases 3/5/6, an explainer
+    that dresses up every flag as a real pattern would be harmful.
+  - Idempotent: stable finding keys (clusters keyed by a hash of
+    their member ids, since HDBSCAN cluster numbers change between
+    runs) + an evidence hash; unchanged findings cost no tokens.
+    Findings that disappear are marked active=0, not deleted.
+  - Model: SUMMARY_MODEL, falling back through LLM_MODEL_CHAIN on
+    rate limit (needed in practice - see below).
+detect_patterns.py and cluster_root_causes.py were refactored to
+expose evaluate_category() / find_clusters() so Phase 7 reuses the
+exact same gating and clustering logic; detect_patterns' printed
+output was diffed before/after and is unchanged.
+
+First real run (450 extracted incidents) produced 22 findings, but
+reading them exposed a new confound: change-points in FOUR
+categories (Config-Change, External-Dependency, Indeterminate,
+Saturation) all landed on the same week, 2026-06-15. Checked
+extraction coverage per week: weeks from ~mid-June onward were
+90-100% extracted, earlier weeks 0-54% (extraction runs
+newest-first, and the outage above left holes). The "change-point"
+was the boundary between partly- and fully-extracted history -
+LEFT-censoring, the mirror image of the right-censoring already
+handled for the newest weeks. The LLM itself flagged most of these
+as NOT coherent, which is the skeptical prompt doing its job, but
+the detection shouldn't have produced them.
+
+Fix: added MIN_WEEK_EXTRACTION_COVERAGE=0.9 and
+coverage_start_week() in detect_patterns.py - detection now only
+uses the most recent unbroken run of weeks that are >= 90%
+extracted (currently 2026-06-29 onward, 9 usable weeks). Result:
+the 2026-06-15 artifacts are gone; findings dropped to 3 detection
+results (Config-Change and Indeterminate change-points around
+2026-08-03, External-Dependency anomaly week of 2026-08-24) plus
+12 clusters - 15 active findings. Note the earlier Saturation
+change-point (2026-08-10, from the 250-record batch) no longer
+appears with more data - consistent with it having been
+low-confidence.
+
+Observations from reading the summaries:
+  - Grounding works: on the External-Dependency anomaly the model
+    excluded the one incident that was really an internal Postgres
+    issue from its citations, and said so.
+  - Strongest results match Phase 6: the post-deploy migration lock
+    cluster (coherent, high), plus new ones at 450 records - Redis
+    memory exhaustion from audit-event backlog, ci-runners inode
+    saturation, Sidekiq shard saturation (all coherent, high).
+  - Verdict instability: gpt-oss-120b's daily quota was exhausted by
+    the extraction batch, so the re-run fell back to gpt-oss-20b.
+    The two models disagreed on the External-Dependency anomaly
+    (120b: NOT coherent; 20b: coherent) from near-identical
+    evidence, and 20b's own explanation describes four unrelated
+    external services - so "coherent" from the smaller model is less
+    trustworthy. Open item: re-run with --force on 120b when quota
+    allows, and consider storing which verdicts came from fallback
+    models so the dashboard can mark them.
+  - Evidence is capped at 8 incidents, so the 10-11 member clusters
+    are explained from a subset.
+Plan change: none to phase structure. Phase 8 (dashboard) should
+read pattern_summaries WHERE active=1 and show the coherent flag
+and model alongside each explanation, not just the headline.

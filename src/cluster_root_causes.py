@@ -76,7 +76,13 @@ def load_summaries(conn):
     """, conn)
 
 
-def run():
+def find_clusters():
+    """
+    Filters, embeds and clusters all summaries. Returns the summaries
+    DataFrame with a "cluster" column (-1 = unclustered), or None if
+    there isn't enough data. Shared by run() (prints) and Phase 7's
+    summarize.py (explains clusters) so both see identical clusters.
+    """
     conn = get_connection()
     df = load_summaries(conn)
     conn.close()
@@ -85,7 +91,7 @@ def run():
         print(f"Only {len(df)} summaries available - need at least "
               f"{MIN_CLUSTER_SIZE} for clustering to be meaningful. "
               f"Run more extraction batches first.")
-        return
+        return None
 
     before = len(df)
     df = df[~df["root_cause_summary"].apply(is_boilerplate)].reset_index(drop=True)
@@ -96,7 +102,7 @@ def run():
     if len(df) < MIN_CLUSTER_SIZE:
         print(f"After filtering, only {len(df)} substantive summaries remain - "
               f"not enough to cluster yet.")
-        return
+        return None
 
     print(f"Embedding {len(df)} root-cause summaries "
           f"(one-time model download on first run)...")
@@ -118,8 +124,15 @@ def run():
                                            # clusters over few large ones -
                                            # counters the chaining behavior
     )
-    labels = clusterer.fit_predict(embeddings)
-    df["cluster"] = labels
+    df["cluster"] = clusterer.fit_predict(embeddings)
+    return df
+
+
+def run():
+    df = find_clusters()
+    if df is None:
+        return
+    labels = df["cluster"].values
 
     n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
     n_noise = int((labels == -1).sum())

@@ -31,7 +31,37 @@ import pandas as pd
 import ruptures as rpt
 
 from src.db import get_connection
-from src.config import EXCLUDE_RECENT_WEEKS, MIN_WEEKS_FOR_DETECTION, MIN_TOTAL_FOR_ZSCORE
+from src.config import (EXCLUDE_RECENT_WEEKS, MIN_WEEKS_FOR_DETECTION, MIN_TOTAL_FOR_ZSCORE,
+                        MIN_WEEK_EXTRACTION_COVERAGE, DATA_CUTOFF_DATE)
+
+
+def coverage_start_week(conn):
+    """
+    Returns the first week (ISO date string) of the most recent unbroken
+    run of weeks whose extraction coverage is >= MIN_WEEK_EXTRACTION_COVERAGE,
+    or None if no week qualifies. Weeks before this are only partly
+    extracted, so their counts are artificially low (left-censoring - the
+    mirror image of the right-censoring handled by EXCLUDE_RECENT_WEEKS).
+    """
+    df = pd.read_sql_query("""
+        SELECT r.created_at, s.incident_id IS NOT NULL AS extracted
+        FROM raw_incidents r
+        LEFT JOIN structured_incidents s ON s.incident_id = r.id
+        WHERE r.created_at >= ?
+    """, conn, params=(DATA_CUTOFF_DATE,))
+    if df.empty:
+        return None
+    df["created_at"] = pd.to_datetime(df["created_at"]).dt.tz_localize(None)
+    # Same week bucketing as aggregate.py (Monday week starts).
+    df["week_start"] = df["created_at"].dt.to_period("W").dt.start_time
+    coverage = df.groupby("week_start")["extracted"].mean().sort_index()
+
+    start = None
+    for week, frac in coverage[::-1].items():  # newest -> oldest
+        if frac < MIN_WEEK_EXTRACTION_COVERAGE:
+            break
+        start = week
+    return start.strftime("%Y-%m-%d") if start is not None else None
 
 
 def load_series(conn):
@@ -39,7 +69,10 @@ def load_series(conn):
         "SELECT week_start, failure_category, count FROM weekly_category_counts",
         conn
     )
-    return df
+    start = coverage_start_week(conn)
+    if start is None:
+        return df.iloc[0:0]
+    return df[df["week_start"] >= start].reset_index(drop=True)
 
 
 def build_full_series(df, category):
@@ -86,6 +119,39 @@ def changepoints(series, min_size=3):
     return [series.index[b].date() for b in breakpoints]
 
 
+def evaluate_category(df, category):
+    """
+    Runs all gates + detectors for one category and returns the result
+    as data, so Phase 7 (summarize.py) can consume the same findings
+    run() prints - one place owns the gating logic, not two.
+
+    status is one of:
+      "insufficient_weeks" - fewer than MIN_WEEKS_FOR_DETECTION usable weeks
+      "too_sparse"         - total below MIN_TOTAL_FOR_ZSCORE
+      "evaluated"          - detectors ran (anomalies/changepoints may be empty)
+    """
+    full_series = build_full_series(df, category)
+    usable = apply_censoring_exclusion(full_series)
+    result = {
+        "category": category,
+        "usable": usable,
+        "usable_weeks": len(usable),
+        "total": int(usable.sum()),
+        "anomalies": [],
+        "changepoints": [],
+    }
+
+    if len(usable) < MIN_WEEKS_FOR_DETECTION:
+        result["status"] = "insufficient_weeks"
+    elif usable.sum() < MIN_TOTAL_FOR_ZSCORE:
+        result["status"] = "too_sparse"
+    else:
+        result["status"] = "evaluated"
+        result["anomalies"] = zscore_anomalies(usable)
+        result["changepoints"] = changepoints(usable)
+    return result
+
+
 def run():
     conn = get_connection()
     df = load_series(conn)
@@ -95,40 +161,37 @@ def run():
         print("No aggregated data yet - run aggregate.py first.")
         return
 
+    print(f"Using weeks from {df['week_start'].min()} on (earlier weeks are "
+          f"<{MIN_WEEK_EXTRACTION_COVERAGE:.0%} extracted - left-censoring correction).")
     categories = sorted(df["failure_category"].unique())
     print(f"Checking {len(categories)} categories "
           f"(excluding the most recent {EXCLUDE_RECENT_WEEKS} weeks "
           f"from all of them - right-censoring correction)...\n")
 
     for category in categories:
-        full_series = build_full_series(df, category)
-        usable = apply_censoring_exclusion(full_series)
+        r = evaluate_category(df, category)
 
-        if len(usable) < MIN_WEEKS_FOR_DETECTION:
-            print(f"[{category}] Only {len(usable)} usable weeks "
+        if r["status"] == "insufficient_weeks":
+            print(f"[{category}] Only {r['usable_weeks']} usable weeks "
                   f"(need {MIN_WEEKS_FOR_DETECTION}+) - skipping, not enough data yet.")
             continue
 
-        print(f"[{category}] {len(usable)} usable weeks, "
-              f"total incidents: {int(usable.sum())}")
+        print(f"[{category}] {r['usable_weeks']} usable weeks, "
+              f"total incidents: {r['total']}")
 
-        if usable.sum() < MIN_TOTAL_FOR_ZSCORE:
+        if r["status"] == "too_sparse":
             print(f"    Too sparse to evaluate (total < {MIN_TOTAL_FOR_ZSCORE}) - "
                   f"skipping anomaly/change-point checks, not enough volume "
                   f"for the statistics to mean anything.\n")
             continue
 
-        anomalies = zscore_anomalies(usable)
-        if anomalies:
-            for week, count, z in anomalies:
-                print(f"    ANOMALY: week of {week} had {count} incidents (z={z})")
+        for week, count, z in r["anomalies"]:
+            print(f"    ANOMALY: week of {week} had {count} incidents (z={z})")
 
-        cps = changepoints(usable)
-        if cps:
-            for cp in cps:
-                print(f"    CHANGE-POINT detected around week of {cp}")
+        for cp in r["changepoints"]:
+            print(f"    CHANGE-POINT detected around week of {cp}")
 
-        if not anomalies and not cps:
+        if not r["anomalies"] and not r["changepoints"]:
             print(f"    No notable pattern detected.")
         print()
 

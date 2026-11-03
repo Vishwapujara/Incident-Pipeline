@@ -112,10 +112,13 @@ def run(limit=None):
             continue
 
         save_result(conn, incident_id, result, current_model)
+        # Commit every record: an open write transaction locks the whole
+        # SQLite file, which blocked aggregate/summarize from running
+        # alongside a batch. One small commit per LLM call is negligible.
+        conn.commit()
         succeeded += 1
 
         if i % 25 == 0:
-            conn.commit()  # periodic commit so progress isn't lost on interruption
             print(f"[{i}/{total}] processed so far ({succeeded} ok, {failed} failed, "
                   f"current model: {current_model})")
 
