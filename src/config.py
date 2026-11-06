@@ -4,14 +4,14 @@ from dotenv import load_dotenv
 load_dotenv()  # reads .env into environment variables
 
 GITLAB_TOKEN = os.getenv("GITLAB_TOKEN")
-if not GITLAB_TOKEN:
-    raise RuntimeError(
-        "GITLAB_TOKEN not found. Copy .env.example to .env and add your token."
-    )
 
 BASE_URL = "https://gitlab.com/api/v4"
 PROJECT_PATH = "gitlab-com%2Fgl-infra%2Fproduction"  # URL-encoded path
-HEADERS = {"PRIVATE-TOKEN": GITLAB_TOKEN}
+# gl-infra/production is a public project, so the token is optional: it
+# only raises API rate limits. Leave GITLAB_TOKEN unset/empty to make
+# anonymous requests (fine for Phase 9's few-pages-per-poll pulls).
+# Note: an INVALID token is not silently ignored - GitLab returns 401.
+HEADERS = {"PRIVATE-TOKEN": GITLAB_TOKEN} if GITLAB_TOKEN else {}
 
 RAW_DATA_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "raw", "issues_raw.json")
 DB_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "processed", "incidents.db")

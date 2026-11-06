@@ -35,13 +35,11 @@ from src.config import (EXCLUDE_RECENT_WEEKS, MIN_WEEKS_FOR_DETECTION, MIN_TOTAL
                         MIN_WEEK_EXTRACTION_COVERAGE, DATA_CUTOFF_DATE)
 
 
-def coverage_start_week(conn):
+def weekly_coverage(conn):
     """
-    Returns the first week (ISO date string) of the most recent unbroken
-    run of weeks whose extraction coverage is >= MIN_WEEK_EXTRACTION_COVERAGE,
-    or None if no week qualifies. Weeks before this are only partly
-    extracted, so their counts are artificially low (left-censoring - the
-    mirror image of the right-censoring handled by EXCLUDE_RECENT_WEEKS).
+    Per-week extraction coverage within the data window: a DataFrame
+    indexed by week_start (Monday, same bucketing as aggregate.py) with
+    raw / extracted counts and coverage fraction.
     """
     df = pd.read_sql_query("""
         SELECT r.created_at, s.incident_id IS NOT NULL AS extracted
@@ -50,11 +48,26 @@ def coverage_start_week(conn):
         WHERE r.created_at >= ?
     """, conn, params=(DATA_CUTOFF_DATE,))
     if df.empty:
-        return None
+        return pd.DataFrame(columns=["raw", "extracted", "coverage"])
     df["created_at"] = pd.to_datetime(df["created_at"]).dt.tz_localize(None)
-    # Same week bucketing as aggregate.py (Monday week starts).
     df["week_start"] = df["created_at"].dt.to_period("W").dt.start_time
-    coverage = df.groupby("week_start")["extracted"].mean().sort_index()
+    out = df.groupby("week_start")["extracted"].agg(raw="size", extracted="sum")
+    out["coverage"] = out["extracted"] / out["raw"]
+    return out.sort_index()
+
+
+def coverage_start_week(conn):
+    """
+    Returns the first week (ISO date string) of the most recent unbroken
+    run of weeks whose extraction coverage is >= MIN_WEEK_EXTRACTION_COVERAGE,
+    or None if no week qualifies. Weeks before this are only partly
+    extracted, so their counts are artificially low (left-censoring - the
+    mirror image of the right-censoring handled by EXCLUDE_RECENT_WEEKS).
+    """
+    cov = weekly_coverage(conn)
+    if cov.empty:
+        return None
+    coverage = cov["coverage"]
 
     start = None
     for week, frac in coverage[::-1].items():  # newest -> oldest

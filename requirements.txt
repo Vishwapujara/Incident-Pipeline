@@ -7,3 +7,4 @@ spacy
 ruptures
 sentence-transformers
 scikit-learn
+streamlit

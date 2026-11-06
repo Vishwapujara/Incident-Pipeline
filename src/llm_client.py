@@ -8,7 +8,8 @@ JSON parsing, or retry mechanics.
 """
 
 import json
-from groq import Groq, RateLimitError
+import time
+from groq import Groq, RateLimitError, APIConnectionError
 from pydantic import ValidationError
 
 from src.config import GROQ_API_KEY
@@ -24,6 +25,20 @@ class DailyRateLimitExceeded(Exception):
     so continuing wastes time and produces useless log noise.
     """
     pass
+
+
+class ProviderUnavailable(Exception):
+    """
+    Raised when the API can't be reached at all (network down, DNS,
+    provider outage) even after backing off. Like DailyRateLimitExceeded
+    this is NOT a per-record problem: before this existed, a network
+    drop made every remaining record "fail" in seconds (100 records lost
+    in one batch - see PROJECT_LOG.md), so the caller should stop.
+    """
+    pass
+
+
+CONNECTION_BACKOFF_SECONDS = [10, 30, 90]  # waits before giving up
 
 if not GROQ_API_KEY:
     raise RuntimeError(
@@ -78,14 +93,27 @@ def extract_incident(raw_text: str, model: str, max_retries: int = 2) -> Extract
         return None
 
     last_error = None
-    for attempt in range(max_retries + 1):
+    connection_failures = 0
+    attempt = 0
+    while attempt <= max_retries:
         try:
             raw_response = _call_llm(raw_text, model)
             return ExtractionResult.model_validate(raw_response)
         except RateLimitError as e:
             raise DailyRateLimitExceeded(str(e))
+        except APIConnectionError as e:
+            # Network problem, not a problem with this record: wait and
+            # retry the same call without using up a record attempt.
+            if connection_failures >= len(CONNECTION_BACKOFF_SECONDS):
+                raise ProviderUnavailable(str(e))
+            wait = CONNECTION_BACKOFF_SECONDS[connection_failures]
+            connection_failures += 1
+            print(f"  Connection error - waiting {wait}s before retrying...")
+            time.sleep(wait)
+            continue
         except (ValidationError, json.JSONDecodeError, Exception) as e:
             last_error = e
+            attempt += 1
             continue
 
     print(f"  Extraction failed after {max_retries + 1} attempts: {last_error}")

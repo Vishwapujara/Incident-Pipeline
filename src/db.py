@@ -106,6 +106,15 @@ def init_schema():
         )
     """)
 
+    # Phase 9: small key/value store for pipeline bookkeeping
+    # (e.g. last_poll_started_at for incremental GitLab pulls).
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS pipeline_state (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+    """)
+
     conn.commit()
     conn.close()
 

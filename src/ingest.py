@@ -26,22 +26,34 @@ def load_raw_issues():
         return json.load(f)
 
 
-def run():
-    init_schema()
-    issues = load_raw_issues()
-    print(f"Loaded {len(issues)} issues from local cache to ingest.")
+def upsert_issues(conn, issues):
+    """
+    Inserts new issues and updates existing ones in place. Shared by the
+    one-off cache load (run) and Phase 9's incremental poll.
 
-    conn = get_connection()
+    Uses ON CONFLICT ... DO UPDATE rather than INSERT OR REPLACE so that
+    ingested_at keeps meaning "when this pipeline FIRST saw the record"
+    (REPLACE deletes and re-inserts the row, resetting it every run).
+    Returns (new_count, updated_count).
+    """
     now = datetime.now(timezone.utc).isoformat()
-
-    inserted = 0
+    existing = {r[0] for r in conn.execute("SELECT id FROM raw_incidents")}
+    new = 0
     for issue in issues:
         labels = issue.get("labels", [])
         conn.execute("""
-            INSERT OR REPLACE INTO raw_incidents
+            INSERT INTO raw_incidents
                 (id, created_at, title, raw_text, source_url,
                  labels_json, severity_label, root_cause_label, ingested_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                created_at = excluded.created_at,
+                title = excluded.title,
+                raw_text = excluded.raw_text,
+                source_url = excluded.source_url,
+                labels_json = excluded.labels_json,
+                severity_label = excluded.severity_label,
+                root_cause_label = excluded.root_cause_label
         """, (
             issue["iid"],
             issue["created_at"],
@@ -53,15 +65,25 @@ def run():
             extract_root_cause(labels),
             now,
         ))
-        inserted += 1
-
+        if issue["iid"] not in existing:
+            new += 1
     conn.commit()
+    return new, len(issues) - new
+
+
+def run():
+    init_schema()
+    issues = load_raw_issues()
+    print(f"Loaded {len(issues)} issues from local cache to ingest.")
+
+    conn = get_connection()
+    new, updated = upsert_issues(conn, issues)
 
     # Sanity check: confirm row count matches what we tried to insert
     count = conn.execute("SELECT COUNT(*) FROM raw_incidents").fetchone()[0]
     conn.close()
 
-    print(f"Inserted/updated {inserted} rows.")
+    print(f"Inserted {new} new rows, updated {updated} existing rows.")
     print(f"Total rows now in raw_incidents table: {count}")
 
 

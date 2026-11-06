@@ -17,7 +17,7 @@ import sys
 from datetime import datetime, timezone
 
 from src.db import get_connection, init_schema
-from src.llm_client import extract_incident, DailyRateLimitExceeded
+from src.llm_client import extract_incident, DailyRateLimitExceeded, ProviderUnavailable
 from src.config import LLM_MODEL_CHAIN, DATA_CUTOFF_DATE
 
 
@@ -84,6 +84,13 @@ def run(limit=None):
             try:
                 result = extract_incident(raw_text, model=current_model)
                 break  # got a real result (or a clean None), move on
+            except ProviderUnavailable as e:
+                print(f"\nCan't reach the LLM API at record {i}/{total} "
+                      f"(id={incident_id}) after backing off: {e}")
+                print("Stopping run - progress is saved. Re-run when the "
+                      "connection is back; finished records are skipped.")
+                stopped_early = True
+                break
             except DailyRateLimitExceeded as e:
                 conn.commit()  # save everything successful so far
                 print(f"\nRate limit hit on '{current_model}' at record "
