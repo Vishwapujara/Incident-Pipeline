@@ -9,7 +9,7 @@ JSON parsing, or retry mechanics.
 
 import json
 import time
-from groq import Groq, RateLimitError, APIConnectionError
+from groq import Groq, RateLimitError, APIConnectionError, NotFoundError
 from pydantic import ValidationError
 
 from src.config import GROQ_API_KEY
@@ -23,6 +23,18 @@ class DailyRateLimitExceeded(Exception):
     rather than retrying per-record - once this limit is hit, every
     subsequent call will fail identically until the quota resets,
     so continuing wastes time and produces useless log noise.
+    """
+    pass
+
+
+class ModelUnavailable(DailyRateLimitExceeded):
+    """
+    Raised when the provider says the model doesn't exist (e.g. it was
+    retired). Subclasses DailyRateLimitExceeded on purpose: the right
+    response is identical - switch to the next model in the chain -
+    so every existing fallback handler covers it automatically. Before
+    this, a retired model made every remaining record in a batch
+    "fail" one by one (113 records in one run - see PROJECT_LOG.md).
     """
     pass
 
@@ -101,6 +113,8 @@ def extract_incident(raw_text: str, model: str, max_retries: int = 2) -> Extract
             return ExtractionResult.model_validate(raw_response)
         except RateLimitError as e:
             raise DailyRateLimitExceeded(str(e))
+        except NotFoundError as e:
+            raise ModelUnavailable(str(e))
         except APIConnectionError as e:
             # Network problem, not a problem with this record: wait and
             # retry the same call without using up a record attempt.

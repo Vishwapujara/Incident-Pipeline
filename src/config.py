@@ -25,8 +25,9 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 LLM_MODEL_CHAIN = [
     "openai/gpt-oss-120b",   # strongest reasoning, tried first
     "openai/gpt-oss-20b",    # smaller/faster fallback
-    "qwen/qwen3.6-27b",      # second fallback
-    "qwen/qwen3.8-27b",      # third fallback
+    "qwen/qwen3.8-27b",      # second fallback
+    # qwen/qwen3.6-27b removed 2026-11-06: Groq retired it (404
+    # model_not_found) - see PROJECT_LOG.md.
 ]
 
 # Scoped to the last N years - recent incidents are more relevant to
@@ -48,7 +49,11 @@ DATA_CUTOFF_DATE = (
 # incidents actually happened. Without this exclusion, trend
 # detection would likely flag a false "sudden drop" every time it
 # runs, since the newest week is always incomplete.
-EXCLUDE_RECENT_WEEKS = 2
+# Raised 2 -> 4 on 2026-11-06 after MEASURING the lag (Phase 9's first
+# incremental pull): of incidents created 0/1/2/3 weeks before a pull,
+# 95%/62%/8%/17% were still open at pull time; from 4 weeks back it's
+# mostly 0-6%. With 2, weeks 2-3 were still undercounted by up to 17%.
+EXCLUDE_RECENT_WEEKS = 4
 
 # Minimum number of (non-excluded) weeks of history a category needs
 # before we attempt any pattern detection on it at all - fewer than

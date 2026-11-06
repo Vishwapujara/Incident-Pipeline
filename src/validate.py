@@ -86,7 +86,7 @@ def run():
     rows = conn.execute("""
         SELECT s.incident_id, s.severity_assessment, s.failure_category,
                s.affected_service, r.severity_label, r.root_cause_label,
-               r.labels_json, r.raw_text
+               r.labels_json, r.raw_text, s.llm_model
         FROM structured_incidents s
         JOIN raw_incidents r ON s.incident_id = r.id
     """).fetchall()
@@ -109,7 +109,7 @@ def run():
     no_check_possible = 0
 
     for (incident_id, severity_assess, failure_cat, llm_service,
-         sev_label, rc_label, labels_json, raw_text) in rows:
+         sev_label, rc_label, labels_json, raw_text, _model) in rows:
 
         service_labels = get_service_labels(labels_json)
 
@@ -140,6 +140,46 @@ def run():
 
     print(f"No check possible at all (no label, no NER entities found): "
           f"{no_check_possible}")
+
+    print_per_model(rows)
+
+
+def _acc(pairs):
+    if not pairs:
+        return "      n/a"
+    hits = sum(1 for gt, pred in pairs if normalize(str(gt)) == normalize(str(pred)))
+    return f"{hits:>3}/{len(pairs):<3} {hits / len(pairs):>4.0%}"
+
+
+def print_per_model(rows):
+    """
+    Same ground-truth checks, split by the model that did the extraction.
+    Needed because the fallback chain means a growing share of records
+    come from smaller models (gpt-oss-20b, qwen) once the main model's
+    daily quota runs out - their accuracy can't be assumed equal.
+    Only GitLab-label ground truth is used here (no NER), so the
+    numbers are comparable across models.
+    """
+    by_model = {}
+    for r in rows:
+        by_model.setdefault(r[8] or "unknown", []).append(r)
+
+    print("\n--- ACCURACY BY EXTRACTION MODEL (GitLab labels as ground truth) ---")
+    print(f"{'model':<24} {'records':>7}   {'severity':>12}   {'root cause':>12}   {'service':>12}")
+    for model, rs in sorted(by_model.items(), key=lambda kv: -len(kv[1])):
+        sev = [(r[4], r[1]) for r in rs if r[4] is not None]
+        rc = [(r[5], r[2]) for r in rs if r[5] is not None]
+        svc_total = svc_hits = 0
+        for r in rs:
+            labels = get_service_labels(r[6])
+            if labels:
+                svc_total += 1
+                svc_hits += any(fuzzy_match(r[3], sl) for sl in labels)
+        svc = (f"{svc_hits:>3}/{svc_total:<3} {svc_hits / svc_total:>4.0%}"
+               if svc_total else "      n/a")
+        print(f"{model:<24} {len(rs):>7}   {_acc(sev):>12}   {_acc(rc):>12}   {svc:>12}")
+    print("Small samples (under ~30) are noisy - compare models only once "
+          "each has a reasonable number of labelled records.")
 
 
 if __name__ == "__main__":

@@ -826,3 +826,133 @@ Observations from reading the summaries:
 Plan change: none to phase structure. Phase 8 (dashboard) should
 read pattern_summaries WHERE active=1 and show the coherent flag
 and model alongside each explanation, not just the headline.
+
+--- Entry: extraction hardening - network outages and a retired model ---
+Two more failure modes where an error unrelated to the record was
+counted as a per-record failure, burning through the batch:
+  1. Network outage (previous entry, 100 records). Fix: llm_client now
+     backs off on APIConnectionError (10s/30s/90s, not counted as a
+     record attempt) and then raises ProviderUnavailable; extract.py
+     stops the run cleanly with progress saved. Tested with a simulated
+     outage (stops after 3 tries) and a single blip (recovers).
+  2. Retired model. A 400-record batch (287 ok, 113 failed) exhausted
+     gpt-oss-120b and gpt-oss-20b, then fell back to qwen/qwen3.6-27b,
+     which Groq has since removed - every remaining record got a 404
+     model_not_found. Fix: removed it from LLM_MODEL_CHAIN (checked the
+     live model list; qwen/qwen3.8-27b is still available) and map
+     NotFoundError to ModelUnavailable, a subclass of
+     DailyRateLimitExceeded, so every existing "switch to the next
+     model" handler (extract and summarize) covers it automatically.
+Lesson: the per-record retry loop must only ever see errors that are
+actually about the record; anything about the provider/model/network
+has to escalate.
+
+Added a per-model accuracy table to validate.py, since a growing share
+of records now come from fallback models. At 1,032 records
+(GitLab labels as ground truth):
+  model            records  severity      root cause    service
+  gpt-oss-120b       612    380/381 100%  17/29 59%     74/109 68%
+  qwen3.8-27b        213    149/150  99%  12/18 67%     20/33  61%
+  gpt-oss-20b        204    113/115  98%   9/13 69%     41/56  73%
+No model is clearly worse; root-cause samples are still small (13-29).
+Severity remains near-perfect for all - the known severity-in-title
+confound from Phase 3, so it says nothing about model quality.
+
+--- Entry: Phase 8 (dashboard) built ---
+Built dashboard.py (Streamlit, read-only, 60s cache so new batches
+show up on reload). Tabs: Patterns (Phase 7 summaries with real/not-
+real verdict, confidence, caveats, a warning when written by a
+fallback model, and an evidence table marking which incidents were
+cited), Trends (weekly counts per category as small multiples,
+SHADING the weeks detection ignores - left- and right-censored - with
+change-points and anomalies marked, so a reader can see why a week
+isn't analysed), Search (all incidents in the window incl. not-yet-
+extracted, drill-down to extracted fields vs GitLab's labels, full
+report text, GitLab link), Data coverage (% extracted per week with
+the 90% threshold).
+Verified with Streamlit's AppTest (no exceptions, filters/toggles/
+search exercised) and by rendering the charts to PNG and reading
+them, which caught three rendering bugs: weeks with zero incidents
+were skipped (line jumped over them), the change-point label
+collided with data points, and coverage bars rendered as hairlines
+(then vanished entirely once given an x2 end date, until given an
+explicit y2 baseline).
+
+--- Entry: Phase 9 (continuous ingestion) built; GitLab token invalid ---
+Built poll.py: one refresh cycle = pull closed issues UPDATED since
+the last poll (stored in a new pipeline_state table, with a 1h
+overlap so nothing falls between windows) -> upsert -> extract a
+bounded batch -> aggregate -> detect/cluster/summarize. Using
+updated_after (not created_after) also catches older incidents that
+were still open at the previous pull, and label edits. If an already-
+extracted incident's report text changed (postmortems are often
+written after closing), its extraction is deleted so it is redone
+from the new text.
+Fixed in passing: ingest.py used INSERT OR REPLACE, which resets
+ingested_at on every run although the schema defines it as "when
+this pipeline FIRST saw the record". Now ON CONFLICT DO UPDATE,
+leaving ingested_at alone; shared by the bulk load and the poll.
+
+Roadblock found: the GITLAB_TOKEN in .env is rejected (401 even on
+GitLab's token self-check endpoint) - expired or revoked. The project
+is public, so the token was made optional in config.py and the poll
+was run anonymously (GITLAB_TOKEN= python -m src.poll). A new token is
+still recommended for higher rate limits.
+
+First poll (raw data had last been pulled 2026-09-11): 396 issues
+fetched, 325 new, 71 updated, 5 extracted incidents re-queued because
+their report text had changed. Full cycle afterwards: 300 extracted
+(1 on gpt-oss-120b, 86 on gpt-oss-20b, 213 on qwen3.8-27b - the main
+models' daily quotas were already spent), 1,032 extracted in total.
+Summaries stopped after 6 of 19 when every model hit its daily limit;
+the remaining ones are generated on the next run (finished ones are
+kept, as designed).
+
+--- Entry: right-censoring measured - EXCLUDE_RECENT_WEEKS 2 -> 4 ---
+The first incremental pull made the right-censoring assumption
+measurable for the first time: for incidents created N full weeks
+before the 2026-09-11 bulk pull, the share that was still OPEN at
+pull time (and therefore missing from the data):
+  N=0: 95%   N=1: 62%   N=2: 8%   N=3: 17%   N=4: 6%   N=5: 5%
+  N=6: 2%    N=7: 0%    N=8: 10%  N>=9: 0%
+EXCLUDE_RECENT_WEEKS=2 removed the two worst weeks but still left
+weeks 2-3 undercounted by up to 17% - enough to show up as a false
+drop at the end of a series. Raised to 4. Tradeoff: detection now
+lags real time by four weeks instead of two. Plan change: the value
+is now grounded in a measurement rather than an assumption.
+
+Same pull also shows the left-censoring guard working as intended:
+the late-closed incidents landed in the Aug 17-31 weeks, which are
+not extracted yet, so those weeks fell below 90% coverage and
+detection currently only uses weeks from 2026-09-07 on - too few to
+flag any change-point or anomaly. This resolves itself: extraction
+runs newest-first, so the next batch fills those weeks first.
+
+--- Entry: Phase 6 at 1,032 records - chaining partly back; evidence fix ---
+At 1,032 records the boilerplate filter needed more markers again
+(fallback models phrase "unknown" differently). Added only PURE non-
+answers after previewing each candidate against the summaries, e.g.
+"root cause was not identified", "caused by unknown factors".
+Deliberately kept summaries that describe a symptom but no cause
+("external-dns stopped syncing...; cause not identified") - a
+recurring symptom is still worth clustering. Durable fix (not done
+yet, needs re-extraction tokens): add a root_cause_identified boolean
+to the extraction schema instead of matching phrases.
+
+The largest cluster grew to 36 incidents spanning 6 categories: the
+real migration-lock group (26 of the 36) with ~10 generic "deployment
+failed" incidents (Helm, KAS, CustomersDot) chained onto it. Swept
+min_samples (3-6) on the same embeddings and measured both purity of
+that cluster and whether five KNOWN real small clusters (SSD quota,
+inode, Redis/audit, Pub/Sub backlog, Sidekiq/PgBouncer) survive:
+  min_samples 3: biggest cluster 72% pure, all five survive
+  min_samples 4: 79% pure, Sidekiq/PgBouncer broken up
+  min_samples 5: 88% pure, Pub/Sub LOST, SSD/inode mostly lost
+  min_samples 6: 91% pure, fewer clusters still
+No setting improves purity without destroying real small clusters,
+so min_samples stays at 3. Instead fixed what the chaining actually
+damages: Phase 7 used to explain a cluster from its 8 lowest incident
+ids, which can be fringe members. It now uses HDBSCAN's membership
+probabilities and passes the 8 most central members - for the
+36-incident cluster all 8 are now migration-lock failures. Plan
+change: none to phase structure.

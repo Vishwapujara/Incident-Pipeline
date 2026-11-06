@@ -38,7 +38,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 import pandas as pd
-from groq import RateLimitError
+from groq import RateLimitError, NotFoundError
 from pydantic import BaseModel, Field, ValidationError
 
 from src.config import SUMMARY_MODEL, LLM_MODEL_CHAIN
@@ -46,7 +46,7 @@ from src.db import get_connection, init_schema
 from src import aggregate
 from src.detect_patterns import load_series, evaluate_category
 from src.cluster_root_causes import find_clusters
-from src.llm_client import client, DailyRateLimitExceeded
+from src.llm_client import client, DailyRateLimitExceeded, ModelUnavailable
 
 MAX_EVIDENCE = 8            # incidents shown to the LLM per finding
 RAW_TEXT_CHARS = 700        # per-incident excerpt length (keeps calls small)
@@ -162,6 +162,10 @@ def collect_findings():
         for cid in sorted(c for c in clusters["cluster"].unique() if c != -1):
             members = clusters[clusters["cluster"] == cid]
             ids = sorted(int(i) for i in members["incident_id"])
+            # Evidence = the most central members (not the lowest ids), so
+            # a large cluster is explained from its core, not its fringe.
+            core = [int(i) for i in members.sort_values(
+                "membership", ascending=False)["incident_id"].head(MAX_EVIDENCE)]
             cats = sorted(members["failure_category"].unique())
             # HDBSCAN cluster numbers aren't stable between runs, so key
             # clusters by their membership instead.
@@ -175,7 +179,7 @@ def collect_findings():
                     "categories": cats,
                     "spans_multiple_categories": len(cats) > 1,
                 },
-                "evidence_ids": ids[:MAX_EVIDENCE],
+                "evidence_ids": sorted(core),
             })
 
     for f in findings:
@@ -248,6 +252,8 @@ def summarize_finding(finding, evidence, model, max_retries=1):
             result = PatternSummary.model_validate(_call(prompt, model))
         except RateLimitError as e:
             raise DailyRateLimitExceeded(str(e))
+        except NotFoundError as e:
+            raise ModelUnavailable(str(e))
         except (ValidationError, json.JSONDecodeError, Exception) as e:
             last_error = e
             continue
@@ -342,7 +348,7 @@ def run(dry_run=False, force=False):
                     _mark_active(conn, [x["key"] for x in findings])
                     conn.close()
                     return
-                print(f"    rate limit hit - switching to {models[model_idx]}")
+                print(f"    rate limit hit / model unavailable - switching to {models[model_idx]}")
 
         if summary is None:
             skipped += 1

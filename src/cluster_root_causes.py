@@ -59,6 +59,18 @@ BOILERPLATE_MARKERS = [
     "not been identified",
     "root cause not",
     "is unknown",
+    # Added 2026-11-06 at 1,032 records: phrasings from the fallback
+    # models (gpt-oss-20b, qwen3.8). Only PURE non-answers - summaries
+    # that describe a symptom but no cause ("external-dns stopped
+    # syncing...; cause not identified") are kept, since a recurring
+    # symptom is still worth clustering.
+    "root cause was not identified",
+    "root cause is currently unknown",
+    "root cause unknown",
+    "caused by unknown factors",
+    "no identified root cause",
+    "not specified in the provided",
+    "no definitive root cause",
 ]
 
 
@@ -125,6 +137,12 @@ def find_clusters():
                                            # counters the chaining behavior
     )
     df["cluster"] = clusterer.fit_predict(embeddings)
+    # Membership strength (0-1): how firmly each incident sits in its
+    # cluster's dense core vs. its fringe. Phase 7 uses it to explain a
+    # large cluster from its core members - at 1,032 records the
+    # migration-lock cluster had grown to 36 with ~10 fringe "deployment
+    # failed" incidents chained on (see PROJECT_LOG.md).
+    df["membership"] = clusterer.probabilities_
     return df
 
 

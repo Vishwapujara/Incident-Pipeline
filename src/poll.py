@@ -103,9 +103,10 @@ def run(extract_limit=300, do_extract=True, do_summarize=True):
         from src import extract
         extract.run(limit=extract_limit)
 
-    print("\n=== Phase 4: aggregation ===")
-    from src import aggregate
-    aggregate.run()
+    if not do_summarize:  # summarize.run() re-aggregates itself
+        print("\n=== Phase 4: aggregation ===")
+        from src import aggregate
+        aggregate.run()
 
     if do_summarize:
         print("\n=== Phases 5-7: detection, clustering, summaries ===")
