@@ -48,6 +48,17 @@ streamlit run src/dashboard.py        # open the dashboard
 python -m src.check_status            # how much is extracted
 ```
 
+Automatic daily refresh (macOS launchd):
+
+```bash
+scripts/schedule.sh on 09:00   # run poll every day at 09:00 (runs on wake if asleep)
+scripts/schedule.sh off        # turn it off
+scripts/schedule.sh status     # on/off, time, last log lines
+scripts/schedule.sh run        # trigger one run now
+```
+
+Log: `data/logs/poll.log`.
+
 Useful flags:
 
 - `python -m src.extract --limit 300`: extract a bounded batch (newest incidents first)
