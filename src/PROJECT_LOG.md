@@ -966,3 +966,21 @@ change: none to phase structure.
 - 60 findings flagged (up from 23). 31 summarized, 29 pending (daily token limit again). Of the active ones, 16 are judged coherent.
 - **Observation, not yet acted on:** change-points cluster on the same dates across many categories (2026-04-20, 05-25, 09-07). Coverage is ~100% on both sides, so this is NOT left-censoring - total incident volume genuinely rose from mid-April to mid-May (49 -> 89/week) and fell after 05-25 (22/week). Per-category counts move with overall volume, so several of these "category trends" are really one volume shift. The summarizer is already marking most of them NOT coherent. Candidate fix: detect on each category's SHARE of weekly incidents instead of raw counts.
 - Added `scripts/schedule.sh` (launchd, daily 09:00, `on/off/status/run`).
+
+---
+
+## 2026-11-10 - Detection switched to volume-adjusted counts
+
+**Problem:** raw-count change-points landed on the same dates in 6 categories (Apr 20, May 25, Sep 7). Coverage was ~100%, so not censoring: total volume rose 49 -> 89/week (mid-Apr to mid-May) and fell to 22/week after May 25, and every category's count followed it. One volume shift was being reported as many "category trends"; the summarizer marked most NOT coherent, but they still cost ~27 LLM calls and cluttered the dashboard.
+
+**Tried, on 31 usable weeks:**
+- Share of weekly incidents + variance-scaled penalty: removed the date-clustering, but share is very noisy in low-volume weeks and the DB-Migration lock-timeout burst (3,5,7 incidents Apr 20-May 4, then six weeks of 0) only showed up weakly.
+- **Pearson residuals vs. volume-expected count** (expected = week total x category's overall share; r = (c-e)/sqrt(e)): ~unit variance if a category just tracks volume, so thresholds are scale-free. Chosen.
+
+**Result:**
+- Change-points (pen = 2 x log n on residuals): **none** in any category. Honest reading: over these 7 months no category's share of incidents shifted in a sustained way beyond noise - the earlier "trends" were volume.
+- Unusual weeks at |r| >= 3 (not 2: ~330 category-weeks tested, ~8 would pass 2 by chance): DB-Migration May 4 (7 vs 2.1 expected) and Sep 21 (4 vs 0.9), Feature-Flag Jun 8, Naive-Traffic Sep 21. The DB-Migration lock-timeout pattern is kept.
+- Findings 60 -> 33; active summaries now 6, all judged coherent (previously 30 active, 16 coherent).
+- Summary stats now give the model expected-vs-actual and share before/after, so it can't mistake a volume rise for a category trend. Dashboard tooltips/captions updated.
+
+**Trade-off:** a category that grows *together with* total volume is no longer flagged - by design, since that is a volume story, not a category story. Total volume itself is not yet monitored as its own series; candidate follow-up.

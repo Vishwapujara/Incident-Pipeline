@@ -1,7 +1,7 @@
 """
 Phase 7 - Summarization.
 
-Turns the findings from Phase 5 (change-points, z-score anomalies)
+Turns the findings from Phase 5 (change-points, unusual weeks)
 and Phase 6 (root-cause clusters) into short plain-language
 explanations, grounded ONLY in the incidents that support each
 finding.
@@ -119,8 +119,8 @@ def collect_findings():
 
             for cp in r["changepoints"]:
                 cp_ts = pd.Timestamp(cp)
-                before = usable[usable.index < cp_ts]
-                after = usable[usable.index >= cp_ts]
+                pre, post = usable.index < cp_ts, usable.index >= cp_ts
+                totals = r["week_totals"]
                 ids = _incidents_in_range(
                     conn, category, cp_ts,
                     cp_ts + timedelta(weeks=CHANGEPOINT_WINDOW_WEEKS))
@@ -130,15 +130,20 @@ def collect_findings():
                     "category": category,
                     "stats": {
                         "change_week": str(cp),
-                        "weekly_mean_before": round(float(before.mean()), 2),
-                        "weekly_mean_after": round(float(after.mean()), 2),
-                        "weeks_before": len(before),
-                        "weeks_after": len(after),
+                        "weekly_mean_before": round(float(usable[pre].mean()), 2),
+                        "weekly_mean_after": round(float(usable[post].mean()), 2),
+                        # Detection is on SHARE of all incidents, so give the
+                        # model the share too - a count rise with a flat share
+                        # is just more incidents overall.
+                        "share_before": round(float(usable[pre].sum() / totals[pre].sum()), 3),
+                        "share_after": round(float(usable[post].sum() / totals[post].sum()), 3),
+                        "weeks_before": int(pre.sum()),
+                        "weeks_after": int(post.sum()),
                     },
                     "evidence_ids": ids[:MAX_EVIDENCE],
                 })
 
-            for week, count, z in r["anomalies"]:
+            for week, count, resid, expected in r["anomalies"]:
                 if count == 0:
                     continue  # a "quiet week" has no incidents to explain
                 start, end = _week_bounds(week)
@@ -150,8 +155,9 @@ def collect_findings():
                     "stats": {
                         "week": str(week),
                         "count": int(count),
-                        "z_score": float(z),
-                        "category_weekly_mean": round(float(usable.mean()), 2),
+                        "expected_from_week_volume": float(expected),
+                        "all_incidents_that_week": int(r["week_totals"][pd.Timestamp(week)]),
+                        "residual": float(resid),
                     },
                     "evidence_ids": ids[:MAX_EVIDENCE],
                 })

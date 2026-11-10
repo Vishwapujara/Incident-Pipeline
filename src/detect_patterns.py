@@ -5,11 +5,18 @@ Reads weekly_category_counts (built by aggregate.py) and, per
 failure_category, checks whether the recent trend is a real,
 notable shift - not just normal week-to-week noise.
 
+Both detectors run on VOLUME-ADJUSTED counts, not raw counts: a
+category's expected count in a week is that week's total incidents times
+the category's overall share, and each week is scored by the Pearson
+residual (count - expected) / sqrt(expected). Raw counts rise and fall
+with total incident volume, so one busy month showed up as the same
+"trend" in half the categories at once (see PROJECT_LOG.md, 2026-11-10).
+
 Two techniques, applied per category:
-  1. Z-score anomaly flagging - is any single week unusually high
-     compared to that category's own history?
-  2. Change-point detection (ruptures) - did the underlying RATE
-     shift at some point, not just one noisy week?
+  1. Unusual weeks - is a single week far above/below what the week's
+     total volume predicts for this category?
+  2. Change-point detection (ruptures) - did the category's share of
+     incidents shift at some point, not just one noisy week?
 
 Critical correctness requirement (see PROJECT_LOG.md - "discovered
 right-censoring in recent weeks"): the most recent EXCLUDE_RECENT_WEEKS
@@ -31,8 +38,11 @@ import pandas as pd
 import ruptures as rpt
 
 from src.db import get_connection
+import numpy as np
+
 from src.config import (EXCLUDE_RECENT_WEEKS, MIN_WEEKS_FOR_DETECTION, MIN_TOTAL_FOR_ZSCORE,
-                        MIN_WEEK_EXTRACTION_COVERAGE, DATA_CUTOFF_DATE)
+                        MIN_WEEK_EXTRACTION_COVERAGE, DATA_CUTOFF_DATE,
+                        ANOMALY_RESIDUAL_THRESHOLD, CHANGEPOINT_PENALTY_FACTOR)
 
 
 def weekly_coverage(conn):
@@ -113,23 +123,42 @@ def apply_censoring_exclusion(series):
     return series.iloc[:-EXCLUDE_RECENT_WEEKS]
 
 
-def zscore_anomalies(series, threshold=2.0):
-    mean, std = series.mean(), series.std()
-    if std == 0 or pd.isna(std):
-        return []
-    z = (series - mean) / std
-    return [(idx.date(), val, round(z_val, 2))
-            for idx, val, z_val in zip(series.index, series.values, z)
-            if abs(z_val) >= threshold]
+def build_total_series(df):
+    """Total incidents per week across all categories, gap-filled like
+    build_full_series so the two align week for week."""
+    totals = df.groupby("week_start")["count"].sum()
+    totals.index = pd.to_datetime(totals.index)
+    full_range = pd.date_range(
+        start=df["week_start"].min(), end=df["week_start"].max(), freq="W-MON")
+    return totals.reindex(full_range, fill_value=0)
 
 
-def changepoints(series, min_size=3):
-    if len(series) < min_size * 2:
+def volume_residuals(counts, totals):
+    """
+    Expected count per week if the category kept its overall share of
+    that week's incidents, and the Pearson residual against it. Weeks with
+    no incidents at all have nothing to compare, so their residual is 0.
+    """
+    share = counts.sum() / totals.sum()
+    expected = totals * share
+    resid = ((counts - expected) / np.sqrt(expected.where(expected > 0))).fillna(0.0)
+    return expected, resid
+
+
+def unusual_weeks(counts, expected, resid, threshold=ANOMALY_RESIDUAL_THRESHOLD):
+    return [(idx.date(), int(c), round(float(r), 2), round(float(e), 2))
+            for idx, c, e, r in zip(counts.index, counts.values,
+                                    expected.values, resid.values)
+            if abs(r) >= threshold]
+
+
+def changepoints(resid, min_size=3):
+    if len(resid) < min_size * 2:
         return []
-    algo = rpt.Pelt(model="l2", min_size=min_size).fit(series.values.reshape(-1, 1))
-    breakpoints = algo.predict(pen=3)
-    breakpoints = [b for b in breakpoints if b < len(series)]  # drop trailing end-marker
-    return [series.index[b].date() for b in breakpoints]
+    pen = CHANGEPOINT_PENALTY_FACTOR * np.log(len(resid))
+    algo = rpt.Pelt(model="l2", min_size=min_size).fit(resid.values.reshape(-1, 1))
+    breakpoints = [b for b in algo.predict(pen=pen) if b < len(resid)]  # drop end-marker
+    return [resid.index[b].date() for b in breakpoints]
 
 
 def evaluate_category(df, category):
@@ -145,12 +174,17 @@ def evaluate_category(df, category):
     """
     full_series = build_full_series(df, category)
     usable = apply_censoring_exclusion(full_series)
+    totals = apply_censoring_exclusion(build_total_series(df))
+    expected, resid = volume_residuals(usable, totals)
     result = {
         "category": category,
         "usable": usable,
         "usable_weeks": len(usable),
         "total": int(usable.sum()),
-        "anomalies": [],
+        "week_totals": totals,
+        "expected": expected,
+        "residuals": resid,
+        "anomalies": [],     # (week, count, residual, expected)
         "changepoints": [],
     }
 
@@ -160,8 +194,8 @@ def evaluate_category(df, category):
         result["status"] = "too_sparse"
     else:
         result["status"] = "evaluated"
-        result["anomalies"] = zscore_anomalies(usable)
-        result["changepoints"] = changepoints(usable)
+        result["anomalies"] = unusual_weeks(usable, expected, resid)
+        result["changepoints"] = changepoints(resid)
     return result
 
 
@@ -198,11 +232,12 @@ def run():
                   f"for the statistics to mean anything.\n")
             continue
 
-        for week, count, z in r["anomalies"]:
-            print(f"    ANOMALY: week of {week} had {count} incidents (z={z})")
+        for week, count, resid, exp in r["anomalies"]:
+            print(f"    UNUSUAL WEEK: week of {week} had {count} incidents, "
+                  f"{exp} expected from that week's total volume (residual {resid})")
 
         for cp in r["changepoints"]:
-            print(f"    CHANGE-POINT detected around week of {cp}")
+            print(f"    CHANGE-POINT in share of incidents around week of {cp}")
 
         if not r["anomalies"] and not r["changepoints"]:
             print(f"    No notable pattern detected.")

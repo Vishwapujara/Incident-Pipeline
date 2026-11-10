@@ -81,3 +81,18 @@ MIN_WEEK_EXTRACTION_COVERAGE = 0.9
 # not one per incident), so daily rate limits aren't a real concern
 # the way they were for Phase 2's bulk extraction.
 SUMMARY_MODEL = "openai/gpt-oss-120b"
+# Phase 5: detection runs on VOLUME-ADJUSTED counts. Each category's
+# expected count in a week = that week's total incidents x the category's
+# overall share; the score is the Pearson residual (count - expected) /
+# sqrt(expected), which is ~unit-variance if the category simply tracks
+# total volume. Added 2026-11-10: raw-count detection flagged the same
+# dates (Apr 20, May 25, Sep 7) in 6 categories at once, because total
+# volume rose 49 -> 89/week and then fell to 22 - one volume shift
+# reported as many "category trends" (see PROJECT_LOG.md).
+#
+# Unusual week: |residual| >= this. 3 rather than 2 because ~11 categories
+# x ~30 weeks is ~330 tests; at 2, roughly 8 would fire by chance alone.
+ANOMALY_RESIDUAL_THRESHOLD = 3.0
+# Change-point penalty = this x log(weeks), on the unit-variance residuals
+# (a BIC-style penalty - scale-free, unlike the old fixed pen=3 on counts).
+CHANGEPOINT_PENALTY_FACTOR = 2.0

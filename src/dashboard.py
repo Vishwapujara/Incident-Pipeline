@@ -131,7 +131,7 @@ tab_patterns, tab_trends, tab_search, tab_cov = st.tabs(
 # ---------------------------------------------------------------- patterns
 
 TYPE_LABEL = {"cluster": "Recurring root cause",
-              "changepoint": "Change in weekly rate",
+              "changepoint": "Change in share of incidents",
               "anomaly": "Unusual week"}
 CONF_ORDER = {"high": 0, "medium": 1, "low": 2}
 
@@ -142,8 +142,14 @@ def describe_stats(row):
         cats = ", ".join(s["categories"])
         return f"{s['size']} incidents · categories: {cats}"
     if row["finding_type"] == "changepoint":
+        share = (f" (share {s['share_before']:.0%} → {s['share_after']:.0%})"
+                 if "share_before" in s else "")
         return (f"{row['category']} · from week of {s['change_week']}: "
-                f"{s['weekly_mean_before']}/week → {s['weekly_mean_after']}/week")
+                f"{s['weekly_mean_before']}/week → {s['weekly_mean_after']}/week{share}")
+    if "expected_from_week_volume" in s:
+        return (f"{row['category']} · week of {s['week']}: {s['count']} incidents, "
+                f"≈{s['expected_from_week_volume']:.1f} expected from that week's "
+                f"{s['all_incidents_that_week']} total")
     return (f"{row['category']} · week of {s['week']}: {s['count']} incidents "
             f"(usual ≈ {s['category_weekly_mean']}/week, z = {s['z_score']})")
 
@@ -249,14 +255,15 @@ def trend_chart(cat_df, weeks, used_weeks, result):
             align="left", dx=4, baseline="bottom", color=MUTED, fontSize=11).encode(
             x="week:T", y=alt.value(196), text="label:N"))
     if result.get("anomalies"):
-        an = pd.DataFrame([{"week": pd.Timestamp(w), "count": c, "z": z}
-                           for w, c, z in result["anomalies"]])
+        an = pd.DataFrame([{"week": pd.Timestamp(w), "count": c, "expected": e}
+                           for w, c, _, e in result["anomalies"]])
         layers.append(alt.Chart(an).mark_point(
             shape="circle", size=220, strokeWidth=2, color=MUTED, filled=False).encode(
             x="week:T", y="count:Q",
             tooltip=[alt.Tooltip("week:T", title="Unusual week", format="%b %d"),
                      alt.Tooltip("count:Q", title="Incidents"),
-                     alt.Tooltip("z:Q", title="z-score")]))
+                     alt.Tooltip("expected:Q", title="Expected from week's volume",
+                                 format=".1f")]))
     return alt.layer(*layers).properties(height=200)
 
 
@@ -270,7 +277,10 @@ with tab_trends:
             f"detection**: weeks before {coverage_start or '—'} are less than "
             f"{MIN_WEEK_EXTRACTION_COVERAGE:.0%} extracted, and the newest "
             f"{EXCLUDE_RECENT_WEEKS} weeks may still have open incidents. "
-            "Dashed lines mark detected rate changes; open circles mark unusual weeks.")
+            "Detection compares each category with that week's **total** incident volume, "
+            "so a busy week for everything isn't flagged. Dashed lines mark a change in "
+            "the category's share of incidents; open circles mark weeks far above "
+            "what the total volume predicts.")
         show_sparse = st.toggle("Include categories too sparse to evaluate", value=False)
         # Every week in range, including weeks with zero incidents overall -
         # otherwise the line would silently skip them.
