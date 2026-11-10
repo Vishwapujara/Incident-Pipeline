@@ -956,3 +956,13 @@ ids, which can be fringe members. It now uses HDBSCAN's membership
 probabilities and passes the 8 most central members - for the
 36-incident cluster all 8 are now migration-lock failures. Plan
 change: none to phase structure.
+
+---
+
+## 2026-11-10 - Refresh cycle at 1,332 records; scheduled polling
+
+- `poll` pulled 32 issues (25 new), extracted 300 (0 failures; 120b -> 20b -> qwen3.8 fallback as each hit its daily limit). Total extracted: 1,332.
+- Every week from at least 2026-03-23 to now is now >=94% extracted, so detection covers ~7 months instead of the ~6 weeks it had before (the Aug 17-31 gap is closed).
+- 60 findings flagged (up from 23). 31 summarized, 29 pending (daily token limit again). Of the active ones, 16 are judged coherent.
+- **Observation, not yet acted on:** change-points cluster on the same dates across many categories (2026-04-20, 05-25, 09-07). Coverage is ~100% on both sides, so this is NOT left-censoring - total incident volume genuinely rose from mid-April to mid-May (49 -> 89/week) and fell after 05-25 (22/week). Per-category counts move with overall volume, so several of these "category trends" are really one volume shift. The summarizer is already marking most of them NOT coherent. Candidate fix: detect on each category's SHARE of weekly incidents instead of raw counts.
+- Added `scripts/schedule.sh` (launchd, daily 09:00, `on/off/status/run`).
