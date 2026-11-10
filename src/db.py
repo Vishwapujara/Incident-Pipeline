@@ -63,6 +63,15 @@ def init_schema():
     except sqlite3.OperationalError:
         pass  # column already exists
 
+    # root_cause_identified (added 2026-11-10): NULL for rows extracted
+    # before the field existed - those fall back to phrase matching.
+    try:
+        conn.execute(
+            "ALTER TABLE structured_incidents ADD COLUMN root_cause_identified INTEGER"
+        )
+    except sqlite3.OperationalError:
+        pass  # column already exists
+
     # Backfill: any existing rows from before this column existed were
     # all extracted with gpt-oss-120b (the only model used so far).
     conn.execute("""

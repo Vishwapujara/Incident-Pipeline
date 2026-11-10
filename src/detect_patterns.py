@@ -199,6 +199,42 @@ def evaluate_category(df, category):
     return result
 
 
+TOTAL_LABEL = "All incidents"
+
+
+def evaluate_total(df):
+    """
+    Detection on TOTAL weekly incident volume - the signal the
+    volume-adjusted category detection deliberately removes. Without this,
+    a surge across all categories (e.g. 49 -> 89/week in Apr-May 2026)
+    would be flagged nowhere.
+
+    Noise scale is estimated robustly from week-to-week differences (MAD),
+    so a few extreme weeks don't inflate it; on this data it matches the
+    Poisson sqrt(mean). The same threshold and penalty as the category
+    detectors then apply to the standardized series.
+    """
+    totals = apply_censoring_exclusion(build_total_series(df))
+    result = {"category": TOTAL_LABEL, "usable": totals, "usable_weeks": len(totals),
+              "total": int(totals.sum()), "anomalies": [], "changepoints": []}
+    if len(totals) < MIN_WEEKS_FOR_DETECTION:
+        result["status"] = "insufficient_weeks"
+        return result
+    d = totals.diff().dropna()
+    sigma = float(np.median(np.abs(d - np.median(d))) / 0.6745 / np.sqrt(2))
+    if sigma == 0:
+        sigma = float(d.std() / np.sqrt(2)) or 1.0
+    baseline = float(totals.median())
+    z = (totals - baseline) / sigma
+    result["status"] = "evaluated"
+    result["baseline"] = baseline
+    result["anomalies"] = [(idx.date(), int(c), round(float(zz), 2), round(baseline, 1))
+                           for idx, c, zz in zip(totals.index, totals.values, z.values)
+                           if abs(zz) >= ANOMALY_RESIDUAL_THRESHOLD]
+    result["changepoints"] = changepoints(totals / sigma)
+    return result
+
+
 def run():
     conn = get_connection()
     df = load_series(conn)
@@ -214,6 +250,17 @@ def run():
     print(f"Checking {len(categories)} categories "
           f"(excluding the most recent {EXCLUDE_RECENT_WEEKS} weeks "
           f"from all of them - right-censoring correction)...\n")
+
+    t = evaluate_total(df)
+    if t["status"] == "evaluated":
+        print(f"[{TOTAL_LABEL}] {t['usable_weeks']} usable weeks, typical week "
+              f"{t['baseline']:.0f} incidents")
+        for week, count, z, base in t["anomalies"]:
+            print(f"    UNUSUAL WEEK: week of {week} had {count} incidents "
+                  f"(typical {base:.0f}, z={z})")
+        for cp in t["changepoints"]:
+            print(f"    CHANGE-POINT in total volume around week of {cp}")
+        print()
 
     for category in categories:
         r = evaluate_category(df, category)

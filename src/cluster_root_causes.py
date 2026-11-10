@@ -81,7 +81,8 @@ def is_boilerplate(summary: str) -> bool:
 
 def load_summaries(conn):
     return pd.read_sql_query("""
-        SELECT s.incident_id, s.failure_category, s.root_cause_summary, r.source_url
+        SELECT s.incident_id, s.failure_category, s.root_cause_summary, r.source_url,
+               s.root_cause_identified
         FROM structured_incidents s
         JOIN raw_incidents r ON s.incident_id = r.id
         WHERE s.root_cause_summary IS NOT NULL AND length(s.root_cause_summary) > 0
@@ -105,11 +106,24 @@ def find_clusters():
               f"Run more extraction batches first.")
         return None
 
+    # A summary is dropped if the model said no root cause was found
+    # (root_cause_identified = 0, records extracted since 2026-11-10) OR
+    # its wording matches a known non-answer. The markers stay as a safety
+    # net and are the only signal for older records (flag is NULL).
     before = len(df)
-    df = df[~df["root_cause_summary"].apply(is_boilerplate)].reset_index(drop=True)
-    filtered_out = before - len(df)
-    print(f"Filtered out {filtered_out} boilerplate 'no root cause identified' "
-          f"summaries ({len(df)} substantive summaries remain).")
+    flag = df["root_cause_identified"]
+    by_marker = df["root_cause_summary"].apply(is_boilerplate)
+    by_flag = flag == 0
+    has_flag = flag.notna()
+    df = df[~(by_marker | by_flag)].reset_index(drop=True)
+    print(f"Filtered out {before - len(df)} 'no root cause identified' summaries "
+          f"({len(df)} substantive summaries remain).")
+    if has_flag.any():
+        # How well the phrase list agrees with the model's own answer, on
+        # records that have both - tells us whether the list is still needed.
+        print(f"  root_cause_identified set on {int(has_flag.sum())} records: "
+              f"{int((by_flag & ~by_marker).sum())} caught only by the flag, "
+              f"{int((by_marker & has_flag & ~by_flag).sum())} only by phrase markers.")
 
     if len(df) < MIN_CLUSTER_SIZE:
         print(f"After filtering, only {len(df)} substantive summaries remain - "

@@ -31,7 +31,7 @@ import streamlit as st
 from src.config import (DATA_CUTOFF_DATE, EXCLUDE_RECENT_WEEKS,
                         MIN_WEEK_EXTRACTION_COVERAGE, SUMMARY_MODEL)
 from src.db import get_connection
-from src.detect_patterns import (load_series, evaluate_category,
+from src.detect_patterns import (load_series, evaluate_category, evaluate_total,
                                  weekly_coverage, coverage_start_week)
 
 # Reference palette (dataviz skill): slot 1 blue for data, neutral inks
@@ -100,6 +100,11 @@ def load_trends():
             results[cat] = {k: r[k] for k in
                             ("status", "total", "usable_weeks", "anomalies", "changepoints")}
             results[cat]["usable_index"] = [str(d.date()) for d in r["usable"].index]
+        t = evaluate_total(analysed)
+        results["__total__"] = {k: t.get(k) for k in
+                                ("status", "total", "usable_weeks", "anomalies",
+                                 "changepoints", "baseline")}
+        results["__total__"]["usable_index"] = [str(d.date()) for d in t["usable"].index]
     return full, results
 
 
@@ -146,6 +151,9 @@ def describe_stats(row):
                  if "share_before" in s else "")
         return (f"{row['category']} · from week of {s['change_week']}: "
                 f"{s['weekly_mean_before']}/week → {s['weekly_mean_after']}/week{share}")
+    if "typical_week" in s:
+        return (f"{row['category']} · week of {s['week']}: {s['count']} incidents "
+                f"(typical week ≈ {s['typical_week']:.0f})")
     if "expected_from_week_volume" in s:
         return (f"{row['category']} · week of {s['week']}: {s['count']} incidents, "
                 f"≈{s['expected_from_week_volume']:.1f} expected from that week's "
@@ -213,7 +221,8 @@ with tab_patterns:
 
 # ---------------------------------------------------------------- trends
 
-def trend_chart(cat_df, weeks, used_weeks, result):
+def trend_chart(cat_df, weeks, used_weeks, result,
+                expected_title="Expected from week's volume"):
     data = (pd.DataFrame({"week": weeks})
             .merge(cat_df, how="left", left_on="week", right_on="week_start")
             .fillna({"count": 0}))
@@ -262,8 +271,7 @@ def trend_chart(cat_df, weeks, used_weeks, result):
             x="week:T", y="count:Q",
             tooltip=[alt.Tooltip("week:T", title="Unusual week", format="%b %d"),
                      alt.Tooltip("count:Q", title="Incidents"),
-                     alt.Tooltip("expected:Q", title="Expected from week's volume",
-                                 format=".1f")]))
+                     alt.Tooltip("expected:Q", title=expected_title, format=".1f")]))
     return alt.layer(*layers).properties(height=200)
 
 
@@ -278,16 +286,30 @@ with tab_trends:
             f"{MIN_WEEK_EXTRACTION_COVERAGE:.0%} extracted, and the newest "
             f"{EXCLUDE_RECENT_WEEKS} weeks may still have open incidents. "
             "Detection compares each category with that week's **total** incident volume, "
-            "so a busy week for everything isn't flagged. Dashed lines mark a change in "
+            "so a busy week for everything is flagged once, in the All incidents chart, "
+            "not in every category. Dashed lines mark a change in "
             "the category's share of incidents; open circles mark weeks far above "
             "what the total volume predicts.")
+        # Total volume first: category detection is volume-adjusted, so a
+        # surge across everything only shows up here.
+        weeks_all = [d.strftime("%Y-%m-%d") for d in pd.date_range(
+            full["week_start"].min(), full["week_start"].max(), freq="W-MON")]
+        tot = results.get("__total__")
+        if tot and tot["status"] == "evaluated":
+            total_df = (full.groupby("week_start", as_index=False)["count"].sum())
+            st.markdown(f"**All incidents** — typical week ≈ {tot['baseline']:.0f} "
+                        "(a surge here is not repeated in the per-category charts)")
+            st.altair_chart(trend_chart(total_df, weeks_all, tot["usable_index"], tot,
+                                        expected_title="Typical week"),
+                            width="stretch")
         show_sparse = st.toggle("Include categories too sparse to evaluate", value=False)
         # Every week in range, including weeks with zero incidents overall -
         # otherwise the line would silently skip them.
         weeks = [d.strftime("%Y-%m-%d") for d in pd.date_range(
             full["week_start"].min(), full["week_start"].max(), freq="W-MON")]
         cats = [c for c in sorted(full["failure_category"].unique())
-                if show_sparse or results.get(c, {}).get("status") == "evaluated"]
+                if c != "__total__" and
+                (show_sparse or results.get(c, {}).get("status") == "evaluated")]
         cats.sort(key=lambda c: -results.get(c, {}).get("total", 0))
         cols = st.columns(2)
         for i, cat in enumerate(cats):

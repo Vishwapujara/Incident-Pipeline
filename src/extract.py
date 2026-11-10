@@ -43,8 +43,9 @@ def save_result(conn, incident_id, result, model_used):
     conn.execute("""
         INSERT OR REPLACE INTO structured_incidents
             (incident_id, failure_category, severity_assessment,
-             root_cause_summary, affected_service, llm_model, extracted_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+             root_cause_summary, affected_service, llm_model, extracted_at,
+             root_cause_identified)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         incident_id,
         result.failure_category,
@@ -53,6 +54,7 @@ def save_result(conn, incident_id, result, model_used):
         result.affected_service,
         model_used,
         datetime.now(timezone.utc).isoformat(),
+        None if result.root_cause_identified is None else int(result.root_cause_identified),
     ))
 
 

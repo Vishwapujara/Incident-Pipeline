@@ -984,3 +984,16 @@ change: none to phase structure.
 - Summary stats now give the model expected-vs-actual and share before/after, so it can't mistake a volume rise for a category trend. Dashboard tooltips/captions updated.
 
 **Trade-off:** a category that grows *together with* total volume is no longer flagged - by design, since that is a volume story, not a category story. Total volume itself is not yet monitored as its own series; candidate follow-up.
+
+---
+
+## 2026-11-10 - Total-volume detection; explicit root_cause_identified
+
+**Total volume as its own series.** The volume-adjusted category detection (previous entry) deliberately ignores surges that hit every category, so the Apr-May surge was flagged nowhere. `evaluate_total()` now runs on weekly totals. Noise scale comes from the MAD of week-to-week differences (6.3 on this data, close to the Poisson sqrt(mean) of 6.3), so the extreme weeks don't inflate it. It uses the same thresholds as the categories (|z| >= 3, change-point penalty 2 x log n).
+- Change-points: Apr 20 (39.8 -> 58.8/week) and May 25 (58.8 -> 34.5/week).
+- Unusual weeks: May 4 (63), May 11 (89) and Oct 12 (60), against a typical week of 37.
+- Phase 7 explains these with the categories that grew most against their usual share, plus evidence drawn round-robin from those categories. Example: the May 11 week was 53 Indeterminate (39.5 expected at the usual share), mostly change-request issues.
+- Bug caught before running: change-point means were first computed over the whole series either side, which averaged the surge away (39.8 -> 39.2). They now use the segments between neighbouring change-points.
+- The dashboard has an "All incidents" chart at the top of Trends.
+
+**`root_cause_identified` (bool) added to the extraction schema, prompt and DB column.** Clustering drops a record if the flag is false OR the summary matches a phrase marker. The markers stay as a safety net and are the only signal for the 1,332 earlier records (flag NULL). Re-extracting those would cost about 1,300 calls, so they were not backfilled. A 3-record live test came back correct: two planned changes -> false, one PgBouncer pool limit -> true. `cluster_root_causes` now reports where the flag and the markers disagree, so we can tell whether the phrase list is still needed as data accumulates.

@@ -44,7 +44,7 @@ from pydantic import BaseModel, Field, ValidationError
 from src.config import SUMMARY_MODEL, LLM_MODEL_CHAIN
 from src.db import get_connection, init_schema
 from src import aggregate
-from src.detect_patterns import load_series, evaluate_category
+from src.detect_patterns import load_series, evaluate_category, evaluate_total
 from src.cluster_root_causes import find_clusters
 from src.llm_client import client, DailyRateLimitExceeded, ModelUnavailable
 
@@ -98,6 +98,39 @@ def _incidents_in_range(conn, category, start, end):
     return df.sort_values("created_at")["incident_id"].tolist()
 
 
+def _all_in_range(conn, start, end):
+    """All extracted incidents in [start, end) with their category."""
+    df = pd.read_sql_query("""
+        SELECT s.incident_id, s.failure_category, r.created_at
+        FROM structured_incidents s
+        JOIN raw_incidents r ON s.incident_id = r.id
+    """, conn)
+    df["created_at"] = pd.to_datetime(df["created_at"]).dt.tz_localize(None)
+    return df[(df["created_at"] >= start) & (df["created_at"] < end)].sort_values("created_at")
+
+
+def _volume_evidence(window, baseline_share):
+    """
+    For a volume finding the question is WHICH categories drove it, so:
+    stats = the categories that grew most vs. their usual share, and the
+    evidence = incidents drawn round-robin from those categories (not
+    just the first 8 by date, which would all be from one day).
+    """
+    counts = window["failure_category"].value_counts()
+    expected = baseline_share.reindex(counts.index).fillna(0) * len(window)
+    excess = (counts - expected).sort_values(ascending=False)
+    drivers = [c for c in excess.index if excess[c] > 0][:4]
+    stats = {c: {"count": int(counts[c]), "expected_at_usual_share": round(float(expected[c]), 1)}
+             for c in drivers}
+    pools = [window[window["failure_category"] == c]["incident_id"].tolist() for c in drivers]
+    ids = []
+    while len(ids) < MAX_EVIDENCE and any(pools):
+        for pool in pools:
+            if pool and len(ids) < MAX_EVIDENCE:
+                ids.append(int(pool.pop(0)))
+    return stats, ids
+
+
 def collect_findings():
     """
     Gathers every finding Phases 5 and 6 currently flag, as dicts with
@@ -111,6 +144,55 @@ def collect_findings():
     conn = get_connection()
     series_df = load_series(conn)
     if not series_df.empty:
+        t = evaluate_total(series_df)
+        if t["status"] == "evaluated":
+            totals = t["usable"]
+            share = series_df.groupby("failure_category")["count"].sum()
+            share = share / share.sum()
+            label = t["category"]
+            # Means are over the segments on either side of each change-point
+            # (bounded by the neighbouring change-points), not the whole
+            # series - otherwise a surge followed by a fall averages away.
+            bounds = ([totals.index[0]] + [pd.Timestamp(c) for c in t["changepoints"]]
+                      + [totals.index[-1] + timedelta(days=1)])
+            for i, cp in enumerate(t["changepoints"], start=1):
+                cp_ts = pd.Timestamp(cp)
+                pre = (totals.index >= bounds[i - 1]) & (totals.index < cp_ts)
+                post = (totals.index >= cp_ts) & (totals.index < bounds[i + 1])
+                window = _all_in_range(conn, cp_ts,
+                                       cp_ts + timedelta(weeks=CHANGEPOINT_WINDOW_WEEKS))
+                drivers, ids = _volume_evidence(window, share)
+                findings.append({
+                    "key": f"changepoint:{label}:{cp}",
+                    "type": "changepoint",
+                    "category": label,
+                    "stats": {
+                        "change_week": str(cp),
+                        "weekly_mean_before": round(float(totals[pre].mean()), 2),
+                        "weekly_mean_after": round(float(totals[post].mean()), 2),
+                        "weeks_before": int(pre.sum()),
+                        "weeks_after": int(post.sum()),
+                        f"categories_that_grew_most_in_first_{CHANGEPOINT_WINDOW_WEEKS}_weeks": drivers,
+                    },
+                    "evidence_ids": ids,
+                })
+            for week, count, z, base in t["anomalies"]:
+                start, end = _week_bounds(week)
+                drivers, ids = _volume_evidence(_all_in_range(conn, start, end), share)
+                findings.append({
+                    "key": f"anomaly:{label}:{week}",
+                    "type": "anomaly",
+                    "category": label,
+                    "stats": {
+                        "week": str(week),
+                        "count": int(count),
+                        "typical_week": base,
+                        "z_score": float(z),
+                        "categories_that_grew_most": drivers,
+                    },
+                    "evidence_ids": ids,
+                })
+
         for category in sorted(series_df["failure_category"].unique()):
             r = evaluate_category(series_df, category)
             if r["status"] != "evaluated":

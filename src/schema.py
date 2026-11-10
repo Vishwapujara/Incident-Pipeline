@@ -53,3 +53,13 @@ class ExtractionResult(BaseModel):
         default=None,
         description="Name of the primary service/system affected, if identifiable."
     )
+    # Added 2026-11-10. Replaces guessing from the summary's wording
+    # (cluster_root_causes.BOILERPLATE_MARKERS) with an explicit answer.
+    # Optional so a model that omits it doesn't fail validation - those
+    # records fall back to the phrase markers, like pre-existing rows.
+    root_cause_identified: Optional[bool] = Field(
+        default=None,
+        description="True if the report states or clearly implies a concrete root "
+                    "cause; False if it is unknown, not yet investigated, or the "
+                    "issue was not a failure (planned change, false alarm)."
+    )

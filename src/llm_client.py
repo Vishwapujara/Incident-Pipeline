@@ -69,7 +69,8 @@ Extract the following fields and respond with ONLY a JSON object, no other text:
   "failure_category": one of [{CATEGORY_LIST}],
   "severity_assessment": integer 1-4 (1 = most severe, 4 = least severe),
   "root_cause_summary": a 1-2 sentence plain-language summary of the root cause,
-  "affected_service": the name of the primary affected service, or null if unclear
+  "affected_service": the name of the primary affected service, or null if unclear,
+  "root_cause_identified": true if the report states or clearly implies a concrete root cause; false if the cause is unknown, still under investigation, or the issue was not a failure (planned change, false alarm, test)
 }}
 
 Base your answer only on the text provided. If uncertain about the category,
