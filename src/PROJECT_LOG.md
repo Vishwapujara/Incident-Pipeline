@@ -997,3 +997,12 @@ change: none to phase structure.
 - The dashboard has an "All incidents" chart at the top of Trends.
 
 **`root_cause_identified` (bool) added to the extraction schema, prompt and DB column.** Clustering drops a record if the flag is false OR the summary matches a phrase marker. The markers stay as a safety net and are the only signal for the 1,332 earlier records (flag NULL). Re-extracting those would cost about 1,300 calls, so they were not backfilled. A 3-record live test came back correct: two planned changes -> false, one PgBouncer pool limit -> true. `cluster_root_causes` now reports where the flag and the markers disagree, so we can tell whether the phrase list is still needed as data accumulates.
+
+---
+
+## 2026-11-11 - First scheduled runs; volume-finding prompt
+
+- **Nov 10 07:00, launchd run: Python died at startup** ("Fatal Python error: error evaluating path ... InterruptedError [Errno 4]"), so no work was done. Probable cause: macOS interrupting a background process on first access to a protected folder (the project is under ~/Desktop). This is not confirmed. **Nov 11 run: succeeded**, starting when the laptop woke. It fetched 12 issues (8 new) and extracted 300 with 0 failures (1,635 total). Connection errors right after wake were absorbed by the backoff. If startup failures recur, move the project out of ~/Desktop or grant the venv python Full Disk Access.
+- Coverage now reaches back to 2026-01-19 (10 months usable). There are 60 findings again, now spread over a longer window rather than coming from the earlier date artifact.
+- **`root_cause_identified` validated:** on 303 records that have it, the flag caught 59 non-answers the phrase markers missed, and the markers caught 0 the flag missed.
+- **Volume findings were all judged NOT coherent (6/6).** The summary prompt asks whether the incidents share a cause, and a busy week rarely does. The question was wrong, not the findings. Volume findings now get extra instructions: explain what drove the excess, using the categories that grew most against their usual share. Coherent = attributable to identifiable drivers, as opposed to spread thinly / noise. A surge driven by reporting (planned changes filed as incidents) counts as coherent and is labelled as such. Test on May 11 (89 incidents): "Spike driven by planned changes and a few software bugs", coherent, high confidence; 53 Indeterminate change records + 11 distinct Software-Change bugs. The 6 old volume summaries were deleted so the next run regenerates them.

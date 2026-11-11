@@ -44,7 +44,7 @@ from pydantic import BaseModel, Field, ValidationError
 from src.config import SUMMARY_MODEL, LLM_MODEL_CHAIN
 from src.db import get_connection, init_schema
 from src import aggregate
-from src.detect_patterns import load_series, evaluate_category, evaluate_total
+from src.detect_patterns import load_series, evaluate_category, evaluate_total, TOTAL_LABEL
 from src.cluster_root_causes import find_clusters
 from src.llm_client import client, DailyRateLimitExceeded, ModelUnavailable
 
@@ -292,8 +292,20 @@ def _load_evidence(conn, ids):
     """, conn, params=ids)
 
 
+# Volume findings (total incidents across ALL categories) need a different
+# question. A busy week almost never has one shared cause, so the default
+# "do these share a cause?" test marked every one NOT coherent (6/6 on
+# 2026-11-11), even when the surge was real and clearly explained.
+VOLUME_INSTRUCTIONS = """THIS IS A VOLUME FINDING: total incidents across all categories changed, not one category. Do NOT judge it by whether the incidents share a single cause - a busy period rarely has one.
+Instead explain WHAT DROVE the change: use the "categories_that_grew_most" stats (actual vs. expected at usual share) and the evidence to say which one or two categories, systems or events account for most of the excess, and whether those are real failures or reporting (e.g. many planned-change or change-request issues filed as incidents).
+For this finding, "coherent" means: the excess can be attributed to identifiable drivers (true) vs. it is spread thinly across many unrelated categories with no clear driver, so it may just be noise (false). If the driver is reporting rather than failures, still answer coherent=true and say so in the headline and caveats."""
+
+
 def _build_prompt(finding, evidence):
-    lines = [
+    lines = []
+    if finding["category"] == TOTAL_LABEL:
+        lines += [VOLUME_INSTRUCTIONS, ""]
+    lines += [
         f"FINDING TYPE: {finding['type']}",
         f"CATEGORY: {finding['category'] or '(cluster - categories listed in stats)'}",
         f"STATS: {json.dumps(finding['stats'])}",
