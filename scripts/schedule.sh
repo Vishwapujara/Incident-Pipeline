@@ -1,5 +1,6 @@
 #!/bin/bash
-# Daily automatic refresh (Phase 9) via macOS launchd.
+# Daily automatic refresh (Phase 9) + hosted-dashboard publish, via macOS
+# launchd. The job runs scripts/daily.sh.
 #
 #   scripts/schedule.sh on [HH:MM]   install/enable, default 09:00
 #   scripts/schedule.sh off          pause (removes the job)
@@ -35,7 +36,7 @@ case "$cmd" in
   <key>Label</key><string>$LABEL</string>
   <key>ProgramArguments</key>
   <array>
-    <string>$PYTHON</string><string>-u</string><string>-m</string><string>src.poll</string>
+    <string>/bin/bash</string><string>$PROJECT/scripts/daily.sh</string>
   </array>
   <key>WorkingDirectory</key><string>$PROJECT</string>
   <key>EnvironmentVariables</key>

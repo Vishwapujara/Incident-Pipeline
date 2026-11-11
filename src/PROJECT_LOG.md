@@ -1006,3 +1006,15 @@ change: none to phase structure.
 - Coverage now reaches back to 2026-01-19 (10 months usable). There are 60 findings again, now spread over a longer window rather than coming from the earlier date artifact.
 - **`root_cause_identified` validated:** on 303 records that have it, the flag caught 59 non-answers the phrase markers missed, and the markers caught 0 the flag missed.
 - **Volume findings were all judged NOT coherent (6/6).** The summary prompt asks whether the incidents share a cause, and a busy week rarely does. The question was wrong, not the findings. Volume findings now get extra instructions: explain what drove the excess, using the categories that grew most against their usual share. Coherent = attributable to identifiable drivers, as opposed to spread thinly / noise. A surge driven by reporting (planned changes filed as incidents) counts as coherent and is labelled as such. Test on May 11 (89 incidents): "Spike driven by planned changes and a few software bugs", coherent, high confidence; 53 Indeterminate change records + 11 distinct Software-Change bugs. The 6 old volume summaries were deleted so the next run regenerates them.
+
+---
+
+## 2026-11-11 - Hosted dashboard (Streamlit Community Cloud)
+
+- **Why not Vercel:** Vercel runs short-lived serverless functions, and Streamlit needs a long-running server with a websocket. Streamlit Community Cloud is free and runs it unchanged.
+- **Data:** the working DB (~90 MB, gitignored) can't go to Cloud. `src/export_snapshot.py` writes a trimmed read-only copy with only the tables and rows the dashboard reads, report text cut to 3,000 characters: 16 MB.
+- **Keeping it out of history:** committing 16 MB to `main` daily would grow the repo by about 6 GB a year. `scripts/daily.sh` (now what launchd runs) does poll -> export -> force-push a single parentless commit to the `dashboard-data` branch (git plumbing, so the working tree isn't touched). The hosted app downloads it from raw.githubusercontent.com with a 1-hour cache, so no redeploy is needed. Authored as Vishwa.
+- **Slim deps:** Cloud installs the requirements file next to the entry point first, so `dashboard/streamlit_app.py` plus `dashboard/requirements.txt` (streamlit, altair, pandas, numpy, ruptures, dotenv) avoids pulling in torch/spaCy.
+- `DB_PATH` now honours `INCIDENTS_DB_PATH`. The dashboard switches to hosted mode only when the local DB is absent.
+- Verified: AppTest on a clean `git archive` copy with no data/ and no API keys renders with no exceptions (4,850 incidents, 1,635 extracted); local mode still works.
+- Gotcha: in zsh, `"$commit:refs/..."` is parsed as a `:r` modifier. daily.sh uses bash and `${commit}`.

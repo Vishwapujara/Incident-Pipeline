@@ -57,7 +57,21 @@ scripts/schedule.sh status     # on/off, time, last log lines
 scripts/schedule.sh run        # trigger one run now
 ```
 
-Log: `data/logs/poll.log`.
+Log: `data/logs/poll.log`. The job runs `scripts/daily.sh`, which also
+publishes the hosted dashboard's data (below).
+
+## Hosted dashboard
+
+The dashboard is deployed on Streamlit Community Cloud from
+`dashboard/streamlit_app.py`. That folder has its own small
+`requirements.txt`, so Cloud doesn't install torch or spaCy.
+
+The working database isn't in git. Each morning `scripts/daily.sh`
+exports a trimmed read-only copy (`python -m src.export_snapshot`,
+~16 MB, report text cut to 3,000 characters) and force-pushes it as a
+single commit to the `dashboard-data` branch, so the snapshots don't pile
+up in history. The hosted app downloads it at most once an hour. Run
+locally, the dashboard reads `data/processed/incidents.db` directly.
 
 Useful flags:
 

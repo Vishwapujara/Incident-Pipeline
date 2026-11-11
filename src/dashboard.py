@@ -16,17 +16,51 @@ batches / summaries show up without restarting.
 
 Usage:
     streamlit run src/dashboard.py
+
+Locally it reads data/processed/incidents.db. Where that doesn't exist
+(the hosted copy on Streamlit Community Cloud) it downloads the daily
+snapshot that scripts/daily.sh pushes to the dashboard-data branch.
 """
 
 import json
 import os
 import sys
+import tempfile
+import urllib.request
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+sys.path.insert(0, ROOT)
 
 import altair as alt
 import pandas as pd
 import streamlit as st
+
+st.set_page_config(page_title="Incident Patterns", layout="wide")
+
+# Hosted mode: no local working database, so read the published snapshot.
+# Must be decided before src.config is imported (it fixes DB_PATH).
+SNAPSHOT_URL = os.getenv(
+    "DASHBOARD_DATA_URL",
+    "https://raw.githubusercontent.com/Vishwapujara/Incident-Pipeline/"
+    "dashboard-data/dashboard.db")
+LOCAL_DB = os.path.join(ROOT, "data", "processed", "incidents.db")
+HOSTED = not os.getenv("INCIDENTS_DB_PATH") and not os.path.exists(LOCAL_DB)
+if HOSTED:
+    os.environ["INCIDENTS_DB_PATH"] = os.path.join(tempfile.gettempdir(),
+                                                   "incident_dashboard.db")
+
+
+@st.cache_data(ttl=3600, show_spinner="Loading the latest data snapshot...")
+def fetch_snapshot(url, dest):
+    """Downloads the snapshot at most once an hour (it changes once a day)."""
+    tmp = dest + ".part"
+    urllib.request.urlretrieve(url, tmp)
+    os.replace(tmp, dest)
+    return os.path.getmtime(dest)
+
+
+if HOSTED:
+    fetch_snapshot(SNAPSHOT_URL, os.environ["INCIDENTS_DB_PATH"])
 
 from src.config import (DATA_CUTOFF_DATE, EXCLUDE_RECENT_WEEKS,
                         MIN_WEEK_EXTRACTION_COVERAGE, SUMMARY_MODEL)
@@ -39,8 +73,6 @@ from src.detect_patterns import (load_series, evaluate_category, evaluate_total,
 SERIES = "#2a78d6"
 MUTED = "#8a8984"
 SHADE = "#8a8984"
-
-st.set_page_config(page_title="Incident Patterns", layout="wide")
 
 
 # ---------------------------------------------------------------- data

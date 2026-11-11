@@ -14,7 +14,8 @@ PROJECT_PATH = "gitlab-com%2Fgl-infra%2Fproduction"  # URL-encoded path
 HEADERS = {"PRIVATE-TOKEN": GITLAB_TOKEN} if GITLAB_TOKEN else {}
 
 RAW_DATA_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "raw", "issues_raw.json")
-DB_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "processed", "incidents.db")
+DB_PATH = os.getenv("INCIDENTS_DB_PATH") or os.path.join(
+    os.path.dirname(__file__), "..", "data", "processed", "incidents.db")
 
 # --- Phase 2: LLM extraction settings ---
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
