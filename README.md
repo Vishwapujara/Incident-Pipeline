@@ -20,7 +20,7 @@ each decision are in [`src/PROJECT_LOG.md`](src/PROJECT_LOG.md).
 | 5 | `detect_patterns` | Change-points and unusual weeks, with censoring corrections | local |
 | 6 | `cluster_root_causes` | Groups incidents with the same root cause across categories | local |
 | 7 | `summarize` | Plain-language, evidence-cited explanation of each flagged pattern | Groq tokens (one call per finding) |
-| 8 | `dashboard` | Streamlit view: patterns, trends, search, data coverage | local |
+| 8 | `export_snapshot` + `web/` | Snapshot DB with precomputed detection → Next.js/tRPC dashboard: patterns, trends, search, data coverage | local |
 | 9 | `poll` | One refresh cycle: pull new issues → extract → aggregate → summarize | GitLab API + Groq |
 
 ## Setup
@@ -44,8 +44,16 @@ GITLAB_TOKEN=...      # optional - the project is public; a token only raises ra
 ```bash
 source .venv/bin/activate
 python -m src.poll                    # refresh: new issues, extraction batch, patterns, summaries
-streamlit run src/dashboard.py        # open the dashboard
+python -m src.export_snapshot         # write snapshot/dashboard.db for the dashboard
 python -m src.check_status            # how much is extracted
+```
+
+Dashboard (Node 22.13+):
+
+```bash
+cd web
+npm install
+npm run dev                           # http://localhost:3000, reads ../snapshot/dashboard.db
 ```
 
 Automatic daily refresh (macOS launchd):
@@ -60,18 +68,37 @@ scripts/schedule.sh run        # trigger one run now
 Log: `data/logs/poll.log`. The job runs `scripts/daily.sh`, which also
 publishes the hosted dashboard's data (below).
 
+## Dashboard architecture
+
+```
+Python pipeline ──▶ export_snapshot ──▶ snapshot/dashboard.db ──▶ tRPC (Next.js route) ──▶ React UI
+ (Groq, spaCy,       (runs Phase 5            (read-only SQLite)       web/src/server         web/src/components
+  HDBSCAN, ruptures)  detection, writes
+                      detection_results,
+                      week_coverage, meta)
+```
+
+- **Python owns all analysis.** The snapshot carries Phase 5's output
+  (`detection_results`, `week_coverage`) and the config values the UI
+  explains (`dashboard_meta`), so the web app never re-implements a statistic.
+  The snapshot is the only contract between the two languages.
+- **TypeScript owns the API and UI.** `web/src/server/routers/*` are typed tRPC
+  procedures over the snapshot (`node:sqlite`, read-only, zod-validated inputs);
+  the client consumes them through `@trpc/tanstack-react-query`, so a schema
+  change in a router is a compile error in the component that uses it.
+- `npm run typecheck` / `npm run build` in `web/`.
+
 ## Hosted dashboard
 
-The dashboard is deployed on Streamlit Community Cloud from
-`dashboard/streamlit_app.py`. That folder has its own small
-`requirements.txt`, so Cloud doesn't install torch or spaCy.
+Deployed on Vercel with **Root Directory = `web`** (no env vars required).
 
 The working database isn't in git. Each morning `scripts/daily.sh`
 exports a trimmed read-only copy (`python -m src.export_snapshot`,
 ~16 MB, report text cut to 3,000 characters) and force-pushes it as a
 single commit to the `dashboard-data` branch, so the snapshots don't pile
-up in history. The hosted app downloads it at most once an hour. Run
-locally, the dashboard reads `data/processed/incidents.db` directly.
+up in history. The hosted server downloads it to `/tmp` at most once an
+hour (override the source with `DASHBOARD_DATA_URL`). Run locally, the
+dashboard reads `snapshot/dashboard.db` (or `INCIDENTS_SNAPSHOT_PATH`).
 
 Useful flags:
 

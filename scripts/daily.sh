@@ -2,7 +2,8 @@
 # What the launchd job runs each morning (scripts/schedule.sh):
 #   1. one refresh cycle (Phase 9)
 #   2. export the small dashboard snapshot
-#   3. publish it to the dashboard-data branch, which the hosted dashboard reads
+#   3. publish it to the dashboard-data branch, which the hosted dashboard
+#      (web/, on Vercel) downloads
 #
 # The branch is replaced each day by a single commit (force-push), so the
 # daily 16 MB snapshot never piles up in the repo's history.
