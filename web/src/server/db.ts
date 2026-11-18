@@ -4,17 +4,65 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import pg from "pg";
 
 /**
- * The web app reads ONE file: the snapshot written by
- * `python -m src.export_snapshot`. It is the contract between the Python
- * pipeline and this app - detection results are precomputed there, so
- * nothing here re-derives statistics.
+ * Data access for the tRPC routers. Two backends, one interface:
  *
- * Local dev: ../snapshot/dashboard.db (or INCIDENTS_SNAPSHOT_PATH).
- * Hosted:    downloaded from the dashboard-data branch, refreshed at most
- *            once an hour (it changes once a day).
+ *  - Postgres, when DATABASE_URL is set (docker-compose, AWS ECS + RDS).
+ *    The pipeline writes the same tables there, including the
+ *    precomputed dashboard tables (src/dashboard_tables.py).
+ *  - SQLite snapshot otherwise (`python -m src.export_snapshot`):
+ *    ../snapshot/dashboard.db locally, or downloaded from the
+ *    dashboard-data branch when hosted without a database (Vercel).
+ *
+ * Routers write SQL with `?` placeholders and portable syntax; `like`
+ * gives the case-insensitive operator for the active backend.
  */
+
+type Param = string | number | null;
+
+export interface Db {
+  readonly kind: "postgres" | "sqlite";
+  /** Case-insensitive LIKE (SQLite's LIKE already is, for ASCII). */
+  readonly like: "LIKE" | "ILIKE";
+  all<T>(sql: string, ...params: Param[]): Promise<T[]>;
+  get<T>(sql: string, ...params: Param[]): Promise<T | undefined>;
+}
+
+// ------------------------------------------------------------- postgres
+
+let pool: pg.Pool | null = null;
+
+function pgSsl(): pg.PoolConfig["ssl"] {
+  // RDS: verify the server certificate against the AWS CA bundle baked
+  // into the image (see web/Dockerfile).
+  const ca = process.env.DB_SSL_CA_FILE;
+  return ca ? { ca: fs.readFileSync(/*turbopackIgnore: true*/ ca, "utf8"), rejectUnauthorized: true } : undefined;
+}
+
+/** `?` → `$1, $2, ...`, skipping quoted literals. */
+function toNumbered(sql: string): string {
+  let i = 0;
+  return sql.replace(/'[^']*'|\?/g, (m) => (m === "?" ? `$${++i}` : m));
+}
+
+function postgresDb(url: string): Db {
+  pool ??= new pg.Pool({ connectionString: url, ssl: pgSsl(), max: 5, idleTimeoutMillis: 30_000 });
+  const p = pool;
+  return {
+    kind: "postgres",
+    like: "ILIKE",
+    async all<T>(sql: string, ...params: Param[]) {
+      return (await p.query(toNumbered(sql), params)).rows as T[];
+    },
+    async get<T>(sql: string, ...params: Param[]) {
+      return (await p.query(toNumbered(sql), params)).rows[0] as T | undefined;
+    },
+  };
+}
+
+// --------------------------------------------------------------- sqlite
 
 const SNAPSHOT_URL =
   process.env.DASHBOARD_DATA_URL ??
@@ -37,13 +85,8 @@ async function download(): Promise<void> {
   fs.renameSync(/*turbopackIgnore: true*/ tmp, DOWNLOAD_PATH); // atomic: never open a half-written file
 }
 
-function openFile(file: string): Open {
-  const db = new DatabaseSync(/*turbopackIgnore: true*/ file, { readOnly: true });
-  return { db, file, mtimeMs: fs.statSync(/*turbopackIgnore: true*/ file).mtimeMs, checkedAt: Date.now() };
-}
-
-/** Returns an open read-only connection, reopening when the file changed. */
-export async function getDb(): Promise<DatabaseSync> {
+/** Returns an open read-only snapshot, reopening when the file changed. */
+async function openSnapshot(): Promise<DatabaseSync> {
   const local = fs.existsSync(/*turbopackIgnore: true*/ LOCAL_PATH);
   const file = local ? LOCAL_PATH : DOWNLOAD_PATH;
 
@@ -76,16 +119,33 @@ export async function getDb(): Promise<DatabaseSync> {
   // may still be between its await and its query.
   const old = current?.db;
   if (old) setTimeout(() => old.close(), 30_000).unref();
-  current = openFile(file);
+  current = {
+    db: new DatabaseSync(/*turbopackIgnore: true*/ file, { readOnly: true }),
+    file,
+    mtimeMs,
+    checkedAt: Date.now(),
+  };
   return current.db;
 }
 
-/** node:sqlite returns null-prototype rows; normalise to plain typed objects. */
-export function all<T>(db: DatabaseSync, sql: string, ...params: (string | number | null)[]): T[] {
-  return db.prepare(sql).all(...params).map((r) => ({ ...r }) as T);
+function sqliteDb(db: DatabaseSync): Db {
+  // node:sqlite returns null-prototype rows; normalise to plain objects.
+  return {
+    kind: "sqlite",
+    like: "LIKE",
+    async all<T>(sql: string, ...params: Param[]) {
+      return db.prepare(sql).all(...params).map((r) => ({ ...r }) as T);
+    },
+    async get<T>(sql: string, ...params: Param[]) {
+      const r = db.prepare(sql).get(...params);
+      return r ? ({ ...r } as T) : undefined;
+    },
+  };
 }
 
-export function get<T>(db: DatabaseSync, sql: string, ...params: (string | number | null)[]): T | undefined {
-  const r = db.prepare(sql).get(...params);
-  return r ? ({ ...r } as T) : undefined;
+// ---------------------------------------------------------------- entry
+
+export async function getDb(): Promise<Db> {
+  const url = process.env.DATABASE_URL;
+  return url ? postgresDb(url) : sqliteDb(await openSnapshot());
 }

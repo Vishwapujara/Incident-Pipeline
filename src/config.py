@@ -14,6 +14,9 @@ PROJECT_PATH = "gitlab-com%2Fgl-infra%2Fproduction"  # URL-encoded path
 HEADERS = {"PRIVATE-TOKEN": GITLAB_TOKEN} if GITLAB_TOKEN else {}
 
 RAW_DATA_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "raw", "issues_raw.json")
+# Postgres when set (docker-compose, AWS RDS); otherwise the SQLite file below.
+# Example: postgresql://incidents:secret@localhost:5432/incidents
+DATABASE_URL = os.getenv("DATABASE_URL") or None
 DB_PATH = os.getenv("INCIDENTS_DB_PATH") or os.path.join(
     os.path.dirname(__file__), "..", "data", "processed", "incidents.db")
 

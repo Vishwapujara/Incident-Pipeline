@@ -1,7 +1,6 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { all, get } from "../db";
-import { publicProcedure, router } from "../trpc";
+import { IN_WINDOW, publicProcedure, router } from "../trpc";
 
 const PAGE_SIZE = 50;
 
@@ -10,10 +9,11 @@ const likeTerm = (q: string) => `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
 
 export const incidentsRouter = router({
   /** Categories that appear in extracted incidents, for the filter. */
-  categories: publicProcedure.query(({ ctx }) =>
-    all<{ c: string }>(
-      ctx.db,
-      "SELECT DISTINCT failure_category AS c FROM structured_incidents ORDER BY c",
+  categories: publicProcedure.query(async ({ ctx }) =>
+    (
+      await ctx.db.all<{ c: string }>(
+        "SELECT DISTINCT failure_category AS c FROM structured_incidents ORDER BY c",
+      )
     ).map((r) => r.c),
   ),
 
@@ -27,15 +27,15 @@ export const incidentsRouter = router({
         page: z.number().int().min(0).default(0),
       }),
     )
-    .query(({ ctx, input }) => {
-      const where: string[] = [];
+    .query(async ({ ctx, input }) => {
+      const where: string[] = [IN_WINDOW];
       const params: (string | number)[] = [];
       if (input.q) {
-        // SQLite LIKE is case-insensitive for ASCII, matching the old
-        // dashboard's lower()-based search.
+        // Case-insensitive (ILIKE on Postgres; SQLite's LIKE already is).
+        const op = ctx.db.like;
         where.push(
-          `(r.title LIKE ? ESCAPE '\\' OR r.raw_text LIKE ? ESCAPE '\\'
-            OR s.root_cause_summary LIKE ? ESCAPE '\\')`,
+          `(r.title ${op} ? ESCAPE '\\' OR r.raw_text ${op} ? ESCAPE '\\'
+            OR s.root_cause_summary ${op} ? ESCAPE '\\')`,
         );
         const t = likeTerm(input.q);
         params.push(t, t, t);
@@ -46,20 +46,21 @@ export const incidentsRouter = router({
       }
       if (input.extractedOnly) where.push("s.incident_id IS NOT NULL");
       const from = `FROM raw_incidents r LEFT JOIN structured_incidents s ON s.incident_id = r.id
-                    ${where.length ? `WHERE ${where.join(" AND ")}` : ""}`;
+                    WHERE ${where.join(" AND ")}`;
 
-      const total = get<{ n: number }>(ctx.db, `SELECT COUNT(*) AS n ${from}`, ...params)?.n ?? 0;
-      const rows = all<{
-        id: number; created_at: string; title: string | null; failure_category: string | null;
-        severity_label: number | null; source_url: string | null;
-      }>(
-        ctx.db,
-        `SELECT r.id, r.created_at, r.title, s.failure_category, r.severity_label, r.source_url
-         ${from} ORDER BY r.created_at DESC LIMIT ? OFFSET ?`,
-        ...params, PAGE_SIZE, input.page * PAGE_SIZE,
-      );
+      const [count, rows] = await Promise.all([
+        ctx.db.get<{ n: number }>(`SELECT CAST(COUNT(*) AS INTEGER) AS n ${from}`, ...params),
+        ctx.db.all<{
+          id: number; created_at: string; title: string | null; failure_category: string | null;
+          severity_label: number | null; source_url: string | null;
+        }>(
+          `SELECT r.id, r.created_at, r.title, s.failure_category, r.severity_label, r.source_url
+           ${from} ORDER BY r.created_at DESC LIMIT ? OFFSET ?`,
+          ...params, PAGE_SIZE, input.page * PAGE_SIZE,
+        ),
+      ]);
       return {
-        total,
+        total: count?.n ?? 0,
         page: input.page,
         pageSize: PAGE_SIZE,
         rows: rows.map((r) => ({
@@ -74,19 +75,18 @@ export const incidentsRouter = router({
     }),
 
   /** Everything known about one incident, including the report text. */
-  byId: publicProcedure.input(z.object({ id: z.number().int() })).query(({ ctx, input }) => {
-    const r = get<{
+  byId: publicProcedure.input(z.object({ id: z.number().int() })).query(async ({ ctx, input }) => {
+    const r = await ctx.db.get<{
       id: number; created_at: string; title: string | null; source_url: string | null;
       raw_text: string | null; severity_label: number | null; root_cause_label: string | null;
       failure_category: string | null; severity_assessment: number | null;
       root_cause_summary: string | null; affected_service: string | null; llm_model: string | null;
     }>(
-      ctx.db,
       `SELECT r.id, r.created_at, r.title, r.source_url, r.raw_text, r.severity_label,
               r.root_cause_label, s.failure_category, s.severity_assessment,
               s.root_cause_summary, s.affected_service, s.llm_model
        FROM raw_incidents r LEFT JOIN structured_incidents s ON s.incident_id = r.id
-       WHERE r.id = ?`,
+       WHERE r.id = ? AND ${IN_WINDOW}`,
       input.id,
     );
     if (!r) throw new TRPCError({ code: "NOT_FOUND", message: `Incident #${input.id} not found` });

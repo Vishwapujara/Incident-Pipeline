@@ -15,8 +15,8 @@ launchd, or Prefect in Phase 10):
   4. Re-aggregate, re-detect and re-summarize (Phases 4-7; Phase 7 only
      spends tokens on new/changed findings).
 
-The dashboard reads the database fresh on each load, so it reflects the
-cycle automatically.
+  5. Refresh the dashboard tables (src.dashboard_tables) so the web app,
+     which reads the database directly in Postgres mode, reflects the cycle.
 
 Usage:
     python -m src.poll                       # full cycle
@@ -84,7 +84,8 @@ def pull_from_gitlab():
         conn.execute(f"DELETE FROM structured_incidents WHERE incident_id IN ({q})", changed)
 
     # Only advance the cursor once the pull and upsert have succeeded.
-    conn.execute("INSERT OR REPLACE INTO pipeline_state (key, value) VALUES (?, ?)",
+    conn.execute("""INSERT INTO pipeline_state (key, value) VALUES (?, ?)
+                    ON CONFLICT (key) DO UPDATE SET value = excluded.value""",
                  (STATE_KEY, started.isoformat()))
     conn.commit()
     conn.close()
@@ -112,6 +113,10 @@ def run(extract_limit=300, do_extract=True, do_summarize=True):
         print("\n=== Phases 5-7: detection, clustering, summaries ===")
         from src import summarize
         summarize.run()
+
+    print("\n=== Dashboard tables ===")
+    from src import dashboard_tables
+    dashboard_tables.run()
 
     print("\nCycle complete - the dashboard will show the new data on next load.")
 

@@ -1,0 +1,48 @@
+# Local stack: Postgres + the Python pipeline + the Next.js dashboard.
+#
+#   docker compose up -d db web                 # database + dashboard on :3000
+#   docker compose run --rm pipeline            # one refresh cycle (python -m src.poll)
+#   docker compose run --rm pipeline python -m src.migrate_to_postgres \
+#       --source /seed/incidents.db             # one-off: seed from the SQLite DB
+#
+# GROQ_API_KEY / GITLAB_TOKEN are read from .env.
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: incidents
+      POSTGRES_PASSWORD: incidents
+      POSTGRES_DB: incidents
+    ports: ["5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U incidents"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  pipeline:
+    build:
+      context: .
+      dockerfile: docker/pipeline.Dockerfile
+    env_file: [{ path: .env, required: false }]
+    environment:
+      DATABASE_URL: postgresql://incidents:incidents@db:5432/incidents
+    volumes:
+      - ./data/processed:/seed:ro
+    depends_on:
+      db: { condition: service_healthy }
+    profiles: [jobs]   # not started by `up`; run on demand
+
+  web:
+    build:
+      context: web
+    environment:
+      DATABASE_URL: postgresql://incidents:incidents@db:5432/incidents
+    ports: ["3000:3000"]
+    depends_on:
+      db: { condition: service_healthy }
+
+volumes:
+  pgdata:

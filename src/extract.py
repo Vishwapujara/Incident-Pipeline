@@ -41,11 +41,19 @@ def get_unprocessed(conn, limit=None):
 
 def save_result(conn, incident_id, result, model_used):
     conn.execute("""
-        INSERT OR REPLACE INTO structured_incidents
+        INSERT INTO structured_incidents
             (incident_id, failure_category, severity_assessment,
              root_cause_summary, affected_service, llm_model, extracted_at,
              root_cause_identified)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (incident_id) DO UPDATE SET
+            failure_category = excluded.failure_category,
+            severity_assessment = excluded.severity_assessment,
+            root_cause_summary = excluded.root_cause_summary,
+            affected_service = excluded.affected_service,
+            llm_model = excluded.llm_model,
+            extracted_at = excluded.extracted_at,
+            root_cause_identified = excluded.root_cause_identified
     """, (
         incident_id,
         result.failure_category,
