@@ -1018,3 +1018,14 @@ change: none to phase structure.
 - `DB_PATH` now honours `INCIDENTS_DB_PATH`. The dashboard switches to hosted mode only when the local DB is absent.
 - Verified: AppTest on a clean `git archive` copy with no data/ and no API keys renders with no exceptions (4,850 incidents, 1,635 extracted); local mode still works.
 - Gotcha: in zsh, `"$commit:refs/..."` is parsed as a `:r` modifier. daily.sh uses bash and `${commit}`.
+
+---
+
+## 2026-11-18 - Dashboard moved from Streamlit to Next.js + tRPC
+
+- **Split:** Python keeps everything analytical (ingest, Groq extraction, spaCy validation, HDBSCAN clustering, ruptures detection, summaries). TypeScript owns the API and UI: `web/` is Next.js (App Router) with a tRPC router over the snapshot DB and React Query on the client.
+- **Detection is precomputed, not ported.** The Streamlit app called `evaluate_category` / `evaluate_total` / `weekly_coverage` on every load. `export_snapshot` now writes their output to `detection_results`, `week_coverage` and `dashboard_meta`, so PELT, the residuals and the censoring rules stay in one language. The snapshot DB is the only interface between Python and TypeScript.
+- **DB access:** Node's built-in `node:sqlite` (read-only), not better-sqlite3, so there is no native module to build on Vercel. Search moved from pandas substring matching to SQL `LIKE` (wildcards escaped, case-insensitive like before) with 50-row pages; counts match the old behaviour (e.g. "pgbouncer" + Saturation = 27; "100%" = 65).
+- **Hosting:** Vercel (Root Directory `web`). The 2026-11-11 reason for Streamlit Cloud (Streamlit needs a long-running websocket server) no longer applies. The `dashboard-data` branch flow is unchanged; the server downloads the snapshot to `/tmp` with a 1-hour TTL and keeps serving the previous copy if a download fails.
+- Removed `src/dashboard.py`, `dashboard/` and `streamlit` from requirements.
+- Verified: all tRPC procedures against the snapshot (4,840 incidents, 1,794 extracted, 46 findings, 25 judged real, same as the Streamlit header), `next build` clean, and headless-Chrome screenshots of all four tabs.
