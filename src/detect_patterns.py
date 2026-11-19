@@ -77,7 +77,11 @@ def coverage_start_week(conn):
     cov = weekly_coverage(conn)
     if cov.empty:
         return None
-    coverage = cov["coverage"]
+    # The newest EXCLUDE_RECENT_WEEKS are never analysed (right-censoring),
+    # so their coverage must not decide where the run starts. Without this,
+    # a pull that adds a not-yet-extracted week (extraction failed or hit
+    # its quota) ends the run immediately and detection returns nothing.
+    coverage = cov["coverage"].iloc[:-EXCLUDE_RECENT_WEEKS]
 
     start = None
     for week, frac in coverage[::-1].items():  # newest -> oldest

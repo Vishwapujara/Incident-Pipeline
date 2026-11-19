@@ -1,4 +1,3 @@
-import { all } from "../db";
 import { publicProcedure, router } from "../trpc";
 
 export type DetectionStatus = "evaluated" | "too_sparse" | "insufficient_weeks";
@@ -36,9 +35,8 @@ export const trendsRouter = router({
    * Weekly counts per category and in total, with Phase 5's results
    * (precomputed in Python by export_snapshot) attached.
    */
-  get: publicProcedure.query(({ ctx }) => {
-    const counts = all<{ week_start: string; failure_category: string; count: number }>(
-      ctx.db,
+  get: publicProcedure.query(async ({ ctx }) => {
+    const counts = await ctx.db.all<{ week_start: string; failure_category: string; count: number }>(
       "SELECT week_start, failure_category, count FROM weekly_category_counts ORDER BY week_start",
     );
     if (!counts.length) return { weeks: [] as string[], total: null, categories: [] as Series[] };
@@ -57,10 +55,12 @@ export const trendsRouter = router({
     }
 
     const det = new Map(
-      all<{
-        series: string; status: DetectionStatus; total: number; baseline: number | null;
-        analysed_weeks_json: string; anomalies_json: string; changepoints_json: string;
-      }>(ctx.db, "SELECT * FROM detection_results").map((d) => [d.series, d]),
+      (
+        await ctx.db.all<{
+          series: string; status: DetectionStatus; total: number; baseline: number | null;
+          analysed_weeks_json: string; anomalies_json: string; changepoints_json: string;
+        }>("SELECT * FROM detection_results")
+      ).map((d) => [d.series, d]),
     );
 
     const build = (key: string, series: number[]): Series => {

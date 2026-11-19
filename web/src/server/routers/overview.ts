@@ -1,5 +1,4 @@
-import { all, get } from "../db";
-import { publicProcedure, router } from "../trpc";
+import { IN_WINDOW, publicProcedure, router } from "../trpc";
 
 export type DashboardMeta = {
   dataCutoffDate: string;
@@ -12,9 +11,9 @@ export type DashboardMeta = {
 
 export const overviewRouter = router({
   /** Header metrics + the pipeline settings the UI explains. */
-  get: publicProcedure.query(({ ctx }) => {
+  get: publicProcedure.query(async ({ ctx }) => {
     const m = Object.fromEntries(
-      all<{ key: string; value: string }>(ctx.db, "SELECT key, value FROM dashboard_meta").map(
+      (await ctx.db.all<{ key: string; value: string }>("SELECT key, value FROM dashboard_meta")).map(
         (r) => [r.key, r.value],
       ),
     );
@@ -27,17 +26,18 @@ export const overviewRouter = router({
       generatedAt: m.generated_at ?? "",
     };
 
-    const counts = get<{ total: number; extracted: number }>(
-      ctx.db,
-      `SELECT COUNT(*) AS total, COUNT(s.incident_id) AS extracted
-       FROM raw_incidents r LEFT JOIN structured_incidents s ON s.incident_id = r.id`,
-    ) ?? { total: 0, extracted: 0 };
-    const findings = get<{ active: number; coherent: number }>(
-      ctx.db,
-      `SELECT COUNT(*) AS active, COALESCE(SUM(coherent), 0) AS coherent
-       FROM pattern_summaries WHERE active = 1`,
-    ) ?? { active: 0, coherent: 0 };
+    const [counts, findings] = await Promise.all([
+      ctx.db.get<{ total: number; extracted: number }>(
+        `SELECT CAST(COUNT(*) AS INTEGER) AS total, CAST(COUNT(s.incident_id) AS INTEGER) AS extracted
+         FROM raw_incidents r LEFT JOIN structured_incidents s ON s.incident_id = r.id
+         WHERE ${IN_WINDOW}`,
+      ),
+      ctx.db.get<{ active: number; coherent: number }>(
+        `SELECT CAST(COUNT(*) AS INTEGER) AS active, CAST(COALESCE(SUM(coherent), 0) AS INTEGER) AS coherent
+         FROM pattern_summaries WHERE active = 1`,
+      ),
+    ]);
 
-    return { meta, ...counts, ...findings };
+    return { meta, ...(counts ?? { total: 0, extracted: 0 }), ...(findings ?? { active: 0, coherent: 0 }) };
   }),
 });

@@ -55,9 +55,12 @@ def run():
     # Full recompute: clear and rewrite, rather than trying to
     # incrementally patch - cheap enough that correctness > cleverness.
     conn.execute("DELETE FROM weekly_category_counts")
-    weekly_counts.to_sql(
-        "weekly_category_counts", conn, if_exists="append", index=False
-    )
+    # executemany rather than DataFrame.to_sql: to_sql only supports
+    # sqlite3 or SQLAlchemy connections, and this runs on Postgres too.
+    conn.executemany(
+        "INSERT INTO weekly_category_counts (week_start, failure_category, count) "
+        "VALUES (?, ?, ?)",
+        [(w, c, int(n)) for w, c, n in weekly_counts.itertuples(index=False)])
     conn.commit()
 
     print(f"Aggregated {len(df)} incidents into "

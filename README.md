@@ -37,6 +37,8 @@ Create `.env` in the project root:
 ```
 GROQ_API_KEY=...      # required for extraction/summaries - console.groq.com/keys
 GITLAB_TOKEN=...      # optional - the project is public; a token only raises rate limits
+                      # (an expired token gets 401, not anonymous access - remove it instead)
+DATABASE_URL=...      # optional - Postgres; without it the pipeline uses data/processed/incidents.db
 ```
 
 ## Everyday use
@@ -68,50 +70,84 @@ scripts/schedule.sh run        # trigger one run now
 Log: `data/logs/poll.log`. The job runs `scripts/daily.sh`, which also
 publishes the hosted dashboard's data (below).
 
+## Database: SQLite or Postgres
+
+`src/db.py` runs the same SQL on both. Without `DATABASE_URL` it uses the
+SQLite file; with it, Postgres (psycopg). Callers use `?` placeholders and
+portable upserts (`ON CONFLICT ... DO UPDATE`); the wrapper rewrites the
+placeholders for Postgres, so no pipeline module branches on the backend.
+
+```bash
+python -m src.migrate_to_postgres     # copy the SQLite DB into DATABASE_URL (keeps paid extractions)
+```
+
 ## Dashboard architecture
 
 ```
-Python pipeline ──▶ export_snapshot ──▶ snapshot/dashboard.db ──▶ tRPC (Next.js route) ──▶ React UI
- (Groq, spaCy,       (runs Phase 5            (read-only SQLite)       web/src/server         web/src/components
-  HDBSCAN, ruptures)  detection, writes
-                      detection_results,
-                      week_coverage, meta)
+Python pipeline ──▶ dashboard_tables ──▶ SQLite / Postgres ──▶ tRPC (Next.js route) ──▶ React UI
+ (Groq, spaCy,       (Phase 5 output,                            web/src/server         web/src/components
+  HDBSCAN, ruptures)  coverage, config)
 ```
 
-- **Python owns all analysis.** The snapshot carries Phase 5's output
-  (`detection_results`, `week_coverage`) and the config values the UI
-  explains (`dashboard_meta`), so the web app never re-implements a statistic.
-  The snapshot is the only contract between the two languages.
+- **Python owns all analysis.** At the end of each cycle `src.dashboard_tables`
+  writes Phase 5's output (`detection_results`, `week_coverage`) and the config
+  the UI explains (`dashboard_meta`), so the web app never re-implements a statistic.
 - **TypeScript owns the API and UI.** `web/src/server/routers/*` are typed tRPC
-  procedures over the snapshot (`node:sqlite`, read-only, zod-validated inputs);
-  the client consumes them through `@trpc/tanstack-react-query`, so a schema
-  change in a router is a compile error in the component that uses it.
-- `npm run typecheck` / `npm run build` in `web/`.
+  procedures (zod-validated inputs) over either backend: `pg` when
+  `DATABASE_URL` is set, otherwise the read-only SQLite snapshot (`node:sqlite`).
+  The client uses `@trpc/tanstack-react-query`, so a router change is a compile
+  error in the component that uses it.
+- `npm run typecheck` / `npm run build` in `web/`; `GET /api/health` checks the DB.
 
-## Hosted dashboard
+## Docker (local stack)
 
-Deployed on Vercel with **Root Directory = `web`** (no env vars required).
+Two images: `docker/pipeline.Dockerfile` (Python, CPU-only torch, spaCy model
+and bge-small embedding model baked in, ~2.8 GB) and `web/Dockerfile` (Next.js
+standalone server, ~400 MB).
 
-The working database isn't in git. Each morning `scripts/daily.sh`
-exports a trimmed read-only copy (`python -m src.export_snapshot`,
-~16 MB, report text cut to 3,000 characters) and force-pushes it as a
-single commit to the `dashboard-data` branch, so the snapshots don't pile
-up in history. The hosted server downloads it to `/tmp` at most once an
-hour (override the source with `DASHBOARD_DATA_URL`). Run locally, the
-dashboard reads `snapshot/dashboard.db` (or `INCIDENTS_SNAPSHOT_PATH`).
+```bash
+docker compose up -d db web                       # Postgres + dashboard on http://localhost:3000
+docker compose run --rm pipeline python -m src.migrate_to_postgres --source /seed/incidents.db
+docker compose run --rm pipeline                  # one refresh cycle (python -m src.poll)
+```
 
-Useful flags:
+## AWS deployment (Terraform)
 
-- `python -m src.extract --limit 300`: extract a bounded batch (newest incidents first)
-- `python -m src.summarize --dry-run`: list flagged findings without spending tokens
-- `python -m src.summarize --force`: regenerate every summary
-- `python -m src.poll --no-extract --no-summarize`: only pull from GitLab
+`infra/terraform` defines:
 
-Free-tier Groq limits allow roughly 200 extractions a day on the main
-model. When a model hits its daily limit, the scripts fall back through
-`LLM_MODEL_CHAIN` in `src/config.py`; if every model is limited, they stop
-and keep their progress. Re-running is always safe: finished work is
-skipped.
+| Piece | Resources |
+|---|---|
+| Network | VPC across 2 AZs; public subnets (ALB, Fargate tasks), private subnets (RDS only, no internet route); no NAT gateway |
+| Database | RDS Postgres 16 (encrypted gp3, 7-day backups, `rds.force_ssl`), reachable only from the two ECS task security groups |
+| Compute | ECS Fargate on ARM64: dashboard as a service behind an ALB (health check hits `/api/health`, circuit-breaker rollback); pipeline as a task |
+| Schedule | EventBridge Scheduler runs the pipeline task daily (09:00 America/New_York) |
+| Secrets | Secrets Manager: `DATABASE_URL` (generated) and the Groq key (set out-of-band, so it never enters Terraform state); TLS to RDS verified against the AWS CA bundle in both images |
+| Images / seed | ECR repos (scan on push, keep last 10); private S3 bucket for the one-off SQLite seed |
+
+```bash
+terraform -chdir=infra/terraform init
+terraform -chdir=infra/terraform apply
+aws secretsmanager put-secret-value --secret-id "$(terraform -chdir=infra/terraform output -raw groq_secret_arn)" --secret-string "$GROQ_API_KEY"
+scripts/aws.sh push      # build ARM64 images, push to ECR, redeploy the dashboard
+scripts/aws.sh seed      # load data/processed/incidents.db into RDS via S3 + a one-off task
+scripts/aws.sh run       # run a cycle now; `scripts/aws.sh logs` to follow it
+terraform -chdir=infra/terraform output dashboard_url
+```
+
+Rough cost: ~$45-50/month (ALB, RDS db.t4g.micro, one small Fargate task,
+public IPv4 addresses); the daily pipeline task is cents. To tear down, set
+`db_deletion_protection = false`, apply, then `terraform destroy`.
+
+## Hosted dashboard without a database (Vercel)
+
+The dashboard also runs with no database: Vercel with **Root Directory =
+`web`** and no env vars. Each morning `scripts/daily.sh` exports a trimmed
+read-only SQLite copy (`python -m src.export_snapshot`, ~16 MB, report text
+cut to 3,000 characters) and force-pushes it as a single commit to the
+`dashboard-data` branch, so snapshots don't pile up in history. The server
+downloads it to `/tmp` at most once an hour (override with
+`DASHBOARD_DATA_URL`). Run locally without `DATABASE_URL`, the dashboard reads
+`snapshot/dashboard.db` (or `INCIDENTS_SNAPSHOT_PATH`).
 
 ## Data
 

@@ -1,0 +1,12 @@
+.git
+.venv
+venv
+data
+snapshot
+web
+infra
+**/__pycache__
+*.pyc
+*.log
+.env
+.DS_Store

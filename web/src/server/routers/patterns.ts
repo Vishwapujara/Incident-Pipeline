@@ -1,4 +1,3 @@
-import { all } from "../db";
 import { publicProcedure, router } from "../trpc";
 
 export type FindingType = "cluster" | "changepoint" | "anomaly";
@@ -33,19 +32,18 @@ const CONF_ORDER: Record<Confidence, number> = { high: 0, medium: 1, low: 2 };
 
 export const patternsRouter = router({
   /** Active Phase 7 findings with their evidence incidents, best first. */
-  list: publicProcedure.query(({ ctx }) => {
-    const rows = all<Row>(ctx.db, "SELECT * FROM pattern_summaries WHERE active = 1");
+  list: publicProcedure.query(async ({ ctx }) => {
+    const rows = await ctx.db.all<Row>("SELECT * FROM pattern_summaries WHERE active = 1");
 
     const evidenceIds = new Set<number>();
     for (const r of rows) for (const id of JSON.parse(r.evidence_ids_json) as number[]) evidenceIds.add(id);
     const incidents = new Map<number, Omit<EvidenceIncident, "cited">>();
     if (evidenceIds.size) {
       const ids = [...evidenceIds];
-      const found = all<{
+      const found = await ctx.db.all<{
         id: number; created_at: string; failure_category: string | null;
         root_cause_summary: string | null; source_url: string | null;
       }>(
-        ctx.db,
         `SELECT r.id, r.created_at, r.source_url, s.failure_category, s.root_cause_summary
          FROM raw_incidents r LEFT JOIN structured_incidents s ON s.incident_id = r.id
          WHERE r.id IN (${ids.map(() => "?").join(",")})`,
@@ -85,7 +83,10 @@ export const patternsRouter = router({
       .sort(
         (a, b) =>
           Number(b.coherent) - Number(a.coherent) ||
-          CONF_ORDER[a.confidence] - CONF_ORDER[b.confidence],
+          CONF_ORDER[a.confidence] - CONF_ORDER[b.confidence] ||
+          // Deterministic tie-break: row order differs between backends.
+          b.generatedAt.localeCompare(a.generatedAt) ||
+          a.key.localeCompare(b.key),
       );
   }),
 });

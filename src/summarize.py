@@ -382,11 +382,26 @@ def _existing(conn):
 
 def _save(conn, finding, summary, model):
     conn.execute("""
-        INSERT OR REPLACE INTO pattern_summaries
+        INSERT INTO pattern_summaries
             (finding_key, finding_type, category, stats_json, evidence_ids_json,
              evidence_hash, headline, explanation, cited_ids_json, coherent,
              confidence, caveats, llm_model, generated_at, active)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+        ON CONFLICT (finding_key) DO UPDATE SET
+            finding_type = excluded.finding_type,
+            category = excluded.category,
+            stats_json = excluded.stats_json,
+            evidence_ids_json = excluded.evidence_ids_json,
+            evidence_hash = excluded.evidence_hash,
+            headline = excluded.headline,
+            explanation = excluded.explanation,
+            cited_ids_json = excluded.cited_ids_json,
+            coherent = excluded.coherent,
+            confidence = excluded.confidence,
+            caveats = excluded.caveats,
+            llm_model = excluded.llm_model,
+            generated_at = excluded.generated_at,
+            active = excluded.active
     """, (
         finding["key"], finding["type"], finding["category"],
         json.dumps(finding["stats"]), json.dumps(finding["evidence_ids"]),
