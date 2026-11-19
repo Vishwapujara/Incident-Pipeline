@@ -6,6 +6,16 @@ extracts structured facts from each incident with an LLM, and flags
 recurring or worsening failure patterns that nobody has time to spot by
 reading hundreds of postmortems.
 
+**Live dashboard: [incident-pipeline.vercel.app](https://incident-pipeline.vercel.app)**
+(refreshed daily; ~4,860 incidents in the 3-year window, ~2,000 LLM-extracted).
+
+| Layer | Stack |
+|---|---|
+| Pipeline (ML/NLP, statistics) | Python · Groq LLMs · spaCy · sentence-transformers + HDBSCAN · ruptures · pandas |
+| Database | SQLite locally, PostgreSQL when `DATABASE_URL` is set |
+| API + UI | TypeScript · Next.js · tRPC · TanStack Query · zod · Recharts |
+| Hosting / infra | Vercel (live) · Docker · Terraform for AWS (ECS Fargate, RDS, ALB, EventBridge) |
+
 The full design, every bug found along the way, and the reasoning behind
 each decision are in [`src/PROJECT_LOG.md`](src/PROJECT_LOG.md).
 
@@ -13,15 +23,15 @@ each decision are in [`src/PROJECT_LOG.md`](src/PROJECT_LOG.md).
 
 | Phase | Script | What it does | Uses |
 |---|---|---|---|
-| 0–1 | `explore_incident_dataset`, `ingest` | One-off bulk pull of all closed issues into SQLite | GitLab API |
+| 0–1 | `explore_incident_dataset`, `ingest` | One-off bulk pull of all closed issues into the database | GitLab API |
 | 2 | `extract` | LLM extraction: failure category, severity, root-cause summary, affected service | Groq tokens |
 | 3 | `validate` | Checks the extraction against GitLab's own labels and spaCy NER | local |
 | 4 | `aggregate` | Weekly incident counts per category | local |
 | 5 | `detect_patterns` | Change-points and unusual weeks, with censoring corrections | local |
 | 6 | `cluster_root_causes` | Groups incidents with the same root cause across categories | local |
 | 7 | `summarize` | Plain-language, evidence-cited explanation of each flagged pattern | Groq tokens (one call per finding) |
-| 8 | `export_snapshot` + `web/` | Snapshot DB with precomputed detection → Next.js/tRPC dashboard: patterns, trends, search, data coverage | local |
-| 9 | `poll` | One refresh cycle: pull new issues → extract → aggregate → summarize | GitLab API + Groq |
+| 8 | `dashboard_tables`, `export_snapshot`, `web/` | Precomputed detection tables → read-only snapshot → Next.js/tRPC dashboard: patterns, trends, search, data coverage | local |
+| 9 | `poll` | One refresh cycle: pull new issues → extract → aggregate → detect → summarize → dashboard tables | GitLab API + Groq |
 
 ## Setup
 
@@ -67,8 +77,28 @@ scripts/schedule.sh status     # on/off, time, last log lines
 scripts/schedule.sh run        # trigger one run now
 ```
 
-Log: `data/logs/poll.log`. The job runs `scripts/daily.sh`, which also
-publishes the hosted dashboard's data (below).
+Log: `data/logs/poll.log`. The job runs `scripts/daily.sh`: one `poll`
+cycle, then `export_snapshot`, then a force-push of the snapshot to the
+`dashboard-data` branch, which the live dashboard reads (below). If the
+poll fails (e.g. Groq quota), it still publishes what the database has.
+
+## Live dashboard (Vercel)
+
+[incident-pipeline.vercel.app](https://incident-pipeline.vercel.app) is the
+`web/` app on Vercel (**Root Directory = `web`**, no environment variables),
+redeployed on every push to `main`.
+
+It needs no database server. The data comes from a trimmed read-only SQLite
+snapshot (`python -m src.export_snapshot`: incidents in the window, report
+text cut to 3,000 characters, plus the precomputed dashboard tables; ~16 MB).
+`scripts/daily.sh` force-pushes it as a single parentless commit to the
+`dashboard-data` branch, so daily snapshots never pile up in git history. The
+server downloads it to `/tmp` at most once an hour, so new data appears
+without a redeploy, and keeps serving the previous copy if a download fails.
+
+- `GET /api/health` → `{"ok":true,"db":"sqlite"}` when the snapshot loaded.
+- Override the source with `DASHBOARD_DATA_URL`. Locally (no `DATABASE_URL`),
+  the app reads `snapshot/dashboard.db`, or `INCIDENTS_SNAPSHOT_PATH`.
 
 ## Database: SQLite or Postgres
 
@@ -113,7 +143,10 @@ docker compose run --rm pipeline                  # one refresh cycle (python -m
 
 ## AWS deployment (Terraform)
 
-`infra/terraform` defines:
+An alternative to Vercel with a real Postgres database and the pipeline
+running in the cloud instead of on a laptop. `terraform validate` passes and
+both images run against Postgres in Docker; **it has not been applied to an
+AWS account yet.** `infra/terraform` defines:
 
 | Piece | Resources |
 |---|---|
@@ -137,17 +170,6 @@ terraform -chdir=infra/terraform output dashboard_url
 Rough cost: ~$45-50/month (ALB, RDS db.t4g.micro, one small Fargate task,
 public IPv4 addresses); the daily pipeline task is cents. To tear down, set
 `db_deletion_protection = false`, apply, then `terraform destroy`.
-
-## Hosted dashboard without a database (Vercel)
-
-The dashboard also runs with no database: Vercel with **Root Directory =
-`web`** and no env vars. Each morning `scripts/daily.sh` exports a trimmed
-read-only SQLite copy (`python -m src.export_snapshot`, ~16 MB, report text
-cut to 3,000 characters) and force-pushes it as a single commit to the
-`dashboard-data` branch, so snapshots don't pile up in history. The server
-downloads it to `/tmp` at most once an hour (override with
-`DASHBOARD_DATA_URL`). Run locally without `DATABASE_URL`, the dashboard reads
-`snapshot/dashboard.db` (or `INCIDENTS_SNAPSHOT_PATH`).
 
 ## Data
 
